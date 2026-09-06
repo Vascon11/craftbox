@@ -163,6 +163,7 @@ genfstab -U /mnt >> /mnt/etc/fstab
 # ---------------------------------------------------------------------------
 MCDIR=/mnt/opt/minecraft
 mkdir -p "$MCDIR/mods" "$MCDIR/backups"
+echo "$MCTYPE" > "$MCDIR/.craftbox-loader"
 say "Baixando servidor ($MCTYPE)"
 UA="mc-install/1.0 (vascon1 minecraft appliance)"
 if [ "$MCTYPE" = "paper" ]; then

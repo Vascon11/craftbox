@@ -27,6 +27,8 @@
     <nav>
       <button class="tab active" data-tab="painel">Painel</button>
       <button class="tab" data-tab="config">Configuração</button>
+      <button class="tab" data-tab="conteudo">Conteúdo</button>
+      <button class="tab" data-tab="compat">Compatibilidade</button>
       <button class="tab" data-tab="console">Console</button>
       <button class="tab" data-tab="logs">Logs</button>
       <button class="tab" data-tab="backups">Backups</button>
@@ -93,6 +95,42 @@
         <p class="muted small">Após salvar, reinicie o servidor pra aplicar. Campos comuns aparecem primeiro.</p>
         <div id="propsForm" class="props"></div>
         <div id="cfgMsg" class="muted small"></div>
+      </div>
+    </section>
+
+    <!-- CONTEUDO (mods/plugins) -->
+    <section id="conteudo" class="panel" hidden>
+      <div class="card">
+        <div class="row spread">
+          <h3>Mods / Plugins</h3>
+          <span class="muted small" id="contentInfo">—</span>
+        </div>
+        <p class="muted small">Busca no <b>Modrinth</b> e instala com 1 clique na pasta certa. Mods (Fabric) precisam ser instalados também no cliente dos jogadores; plugins (Paper) são só no servidor.</p>
+        <form id="searchForm" class="row">
+          <input type="text" id="searchIn" placeholder="buscar (ex: worldedit, lithium, luckperms, dynmap)">
+          <button type="submit">Buscar</button>
+        </form>
+        <div id="searchResults" class="results"></div>
+      </div>
+      <div class="card">
+        <div class="row spread"><h3>Instalados</h3><button id="reloadInstalled" class="ghost">Atualizar</button></div>
+        <div id="installedList"></div>
+      </div>
+    </section>
+
+    <!-- COMPATIBILIDADE -->
+    <section id="compat" class="panel" hidden>
+      <div class="card">
+        <h3>Minecraft "pirata" (modo offline)</h3>
+        <p class="muted small">Permite amigos <b>sem conta premium</b> entrarem. ⚠ Desliga a verificação de conta: qualquer um pode usar qualquer nick e o servidor fica mais exposto. Use só em rede privada / Tailscale.</p>
+        <label class="switch"><input type="checkbox" id="offlineToggle"><span>Ativar modo offline (<code>online-mode=false</code>)</span></label>
+        <div id="offlineMsg" class="muted small"></div>
+      </div>
+      <div class="card">
+        <h3>Compatibilidade Bedrock (celular / console)</h3>
+        <p class="muted small">Instala <b>Geyser + Floodgate</b> pra jogadores do Minecraft <b>Bedrock</b> (celular, console, Windows 10/11) entrarem no seu servidor Java. Depois de instalar, <b>reinicie o servidor</b>. A porta Bedrock é <code>19132/UDP</code> — precisa estar liberada.</p>
+        <button id="bedrockBtn" class="ok">Ativar Bedrock (Geyser + Floodgate)</button>
+        <div id="bedrockMsg" class="muted small"></div>
       </div>
     </section>
 

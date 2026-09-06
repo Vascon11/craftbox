@@ -12,10 +12,16 @@ o suficiente pra rodar ao lado do servidor num notebook antigo (~30–40 MB de R
 - **Console** — envia comandos ao servidor em execução via **RCON**.
 - **Logs** — últimas linhas do `latest.log`, com auto-atualização.
 - **Backups** — lista e dispara o backup do mundo.
+- **Conteúdo** — navegador de **mods/plugins do [Modrinth](https://modrinth.com)**: busca e instala/remove com 1 clique (detecta o loader — Fabric→`mods/`, Paper→`plugins/`). Estilo Prism, mas pro servidor.
+- **Compatibilidade** — **modo offline** ("pirata", `online-mode=false`) com 1 clique e **Bedrock** (celular/console) via **Geyser + Floodgate**, também em 1 clique.
 - **Login por senha** (sessão em cookie assinado).
 
 ![Dashboard](../screenshots/painel-dashboard.jpg)
 ![Configuração](../screenshots/painel-config.jpg)
+![Conteúdo — mods/plugins](../screenshots/painel-conteudo.jpg)
+![Compatibilidade — offline + Bedrock](../screenshots/painel-compat.jpg)
+
+> **Mods (Fabric) x plugins (Paper):** plugins rodam só no servidor (os amigos usam o Minecraft normal). Mods de conteúdo Fabric precisam ser instalados também no cliente de cada jogador — o painel instala o lado do servidor.
 
 ## Instalar no servidor craftbox
 

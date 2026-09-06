@@ -29,7 +29,7 @@ Sem ambiente gráfico, sem peso: toda a RAM sobra pro jogo.
 
 ### Painel web — `craftbox-panel`
 
-Um painel web opcional (**Node.js puro, zero dependências**) pra configurar e gerenciar o servidor pelo navegador: status + stats do sistema (CPU, RAM, disco, temperatura), ligar/reiniciar/desligar, editor visual do `server.properties`, console RCON, logs ao vivo e backups — com login por senha. Veja [`panel/`](panel/).
+Um painel web opcional (**Node.js puro, zero dependências**) pra configurar e gerenciar o servidor pelo navegador: status + stats do sistema (CPU, RAM, disco, temperatura), ligar/reiniciar/desligar, editor visual do `server.properties`, console RCON, logs ao vivo, backups, **navegador de mods/plugins do Modrinth** (instala com 1 clique, estilo Prism) e **compatibilidade Bedrock (Geyser/Floodgate) + modo offline** — tudo com login por senha. Veja [`panel/`](panel/).
 
 ![Painel — dashboard](screenshots/painel-dashboard.jpg)
 ![Painel — configuração](screenshots/painel-config.jpg)

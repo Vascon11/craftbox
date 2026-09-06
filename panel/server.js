@@ -13,6 +13,7 @@
  * Config: config.json (ou env CRAFTBOX_PANEL_CONFIG).
  */
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -34,7 +35,9 @@ const DEFAULT_CONFIG = {
   service: 'minecraft',
   rcon: { host: '127.0.0.1', port: 25575, password: '' }, // password vazio = ler do server.properties
   auth: { salt: '', hash: '' },                            // gere com: node server.js --hash SENHA
-  sessionSecret: ''                                        // gerado automaticamente se vazio
+  sessionSecret: '',                                       // gerado automaticamente se vazio
+  loader: '',                                              // 'paper'|'fabric' (auto-detecta se vazio)
+  mcVersion: ''                                            // ex '1.21.1' (auto-detecta do log se vazio)
 };
 
 function loadConfig() {
@@ -250,6 +253,101 @@ async function systemStats() {
 }
 
 // ---------------------------------------------------------------------------
+// Conteudo: loader, versao, Modrinth, GeyserMC, downloads
+// ---------------------------------------------------------------------------
+const UA = 'craftbox-panel/1.0 (github.com/Vascon11/craftbox)';
+function detectLoader() {
+  if (CONFIG.loader) return CONFIG.loader;
+  try { const m = fs.readFileSync(path.join(CONFIG.mcDir, '.craftbox-loader'), 'utf8').trim(); if (m) return m; } catch {}
+  const hasMods = fs.existsSync(path.join(CONFIG.mcDir, 'mods'));
+  const hasPlugins = fs.existsSync(path.join(CONFIG.mcDir, 'plugins'));
+  if (hasMods && !hasPlugins) return 'fabric';
+  if (hasPlugins && !hasMods) return 'paper';
+  return hasMods ? 'fabric' : 'paper';
+}
+function contentFolder(loader) {
+  const dir = path.join(CONFIG.mcDir, loader === 'fabric' ? 'mods' : 'plugins');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+function loaderCategories(loader) { return loader === 'fabric' ? ['fabric'] : ['paper', 'spigot', 'bukkit']; }
+function detectMcVersion() {
+  if (CONFIG.mcVersion) return CONFIG.mcVersion;
+  try {
+    const log = fs.readFileSync(path.join(CONFIG.mcDir, 'logs', 'latest.log'), 'utf8');
+    const m = log.match(/minecraft server version\s+([\w.\-]+)/i) || log.match(/\(MC:\s*([\w.\-]+)\)/);
+    if (m) return m[1];
+  } catch {}
+  return null;
+}
+function httpsJson(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': UA, Accept: 'application/json' } }, (r) => {
+      if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) { r.resume(); return resolve(httpsJson(new URL(r.headers.location, url).toString())); }
+      if (r.statusCode !== 200) { r.resume(); return reject(new Error('HTTP ' + r.statusCode)); }
+      let d = ''; r.on('data', c => d += c); r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } });
+    }).on('error', reject);
+  });
+}
+function download(url, dest) {
+  return new Promise((resolve, reject) => {
+    const f = fs.createWriteStream(dest);
+    const go = (u) => {
+      const req = https.get(u, { headers: { 'User-Agent': UA } }, (r) => {
+        if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) { r.resume(); return go(new URL(r.headers.location, u).toString()); }
+        if (r.statusCode !== 200) { r.resume(); return reject(new Error('HTTP ' + r.statusCode)); }
+        r.pipe(f); f.on('finish', () => f.close(() => resolve()));
+      });
+      req.setTimeout(60000, () => req.destroy(new Error('download timeout')));
+      req.on('error', (e) => { try { fs.unlinkSync(dest); } catch {} reject(e); });
+    };
+    go(url);
+  });
+}
+async function modrinthSearch(query, loader, version) {
+  const cats = loaderCategories(loader).map(c => `"categories:${c}"`).join(',');
+  const facets = [`[${cats}]`];
+  if (version) facets.push(`["versions:${version}"]`);
+  const url = `https://api.modrinth.com/v2/search?limit=25&query=${encodeURIComponent(query || '')}&facets=${encodeURIComponent('[' + facets.join(',') + ']')}`;
+  const data = await httpsJson(url);
+  return (data.hits || []).map(h => ({ slug: h.slug, title: h.title, description: h.description, downloads: h.downloads, icon: h.icon_url, type: h.project_type }));
+}
+async function modrinthResolve(slug, loader, version) {
+  const tryLoaders = loader === 'fabric' ? [['fabric']] : [['paper'], ['spigot'], ['bukkit']];
+  for (const ls of tryLoaders) {
+    let u = `https://api.modrinth.com/v2/project/${slug}/version?loaders=${encodeURIComponent(JSON.stringify(ls))}`;
+    if (version) u += `&game_versions=${encodeURIComponent(JSON.stringify([version]))}`;
+    let vers = await httpsJson(u).catch(() => []);
+    if ((!vers || !vers.length)) { // sem match exato de versao: qualquer versao desse loader
+      vers = await httpsJson(`https://api.modrinth.com/v2/project/${slug}/version?loaders=${encodeURIComponent(JSON.stringify(ls))}`).catch(() => []);
+    }
+    if (vers && vers.length) {
+      const v = vers[0];
+      const file = v.files.find(f => f.primary) || v.files[0];
+      return { filename: path.basename(file.filename), url: file.url, version: v.version_number };
+    }
+  }
+  throw new Error('sem versao compativel pra esse loader');
+}
+async function installBedrock() {
+  const loader = detectLoader();
+  const folder = contentFolder(loader);
+  const gm = (proj, plat) => `https://download.geysermc.org/v2/projects/${proj}/versions/latest/builds/latest/downloads/${plat}`;
+  const installed = [];
+  if (loader === 'paper') {
+    await download(gm('geyser', 'spigot'), path.join(folder, 'Geyser-Spigot.jar')); installed.push('Geyser-Spigot.jar');
+    await download(gm('floodgate', 'spigot'), path.join(folder, 'floodgate-spigot.jar')); installed.push('floodgate-spigot.jar');
+  } else {
+    await download(gm('geyser', 'fabric'), path.join(folder, 'Geyser-Fabric.jar')); installed.push('Geyser-Fabric.jar');
+    const ver = detectMcVersion();
+    const fg = await modrinthResolve('floodgate', 'fabric', ver);
+    await download(fg.url, path.join(folder, fg.filename)); installed.push(fg.filename);
+    try { const fa = await modrinthResolve('fabric-api', 'fabric', ver); await download(fa.url, path.join(folder, fa.filename)); installed.push(fa.filename); } catch {}
+  }
+  return { loader, folder, installed };
+}
+
+// ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
 function json(res, code, obj) {
@@ -365,6 +463,48 @@ const server = http.createServer(async (req, res) => {
         const r = await run('bash', [path.join(CONFIG.mcDir, 'backup.sh')], { timeout: 120000 });
         return json(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, output: r.stderr || r.stdout || 'backup executado' });
       }
+      // --- conteudo (mods/plugins via Modrinth) ---
+      if (p === '/api/content/info') {
+        const loader = detectLoader();
+        return json(res, 200, { loader, kind: loader === 'fabric' ? 'mods' : 'plugins', mcVersion: detectMcVersion(), onlineMode: readProps()['online-mode'] !== 'false' });
+      }
+      if (p === '/api/content/search') {
+        try { return json(res, 200, { results: await modrinthSearch(url.searchParams.get('q') || '', detectLoader(), detectMcVersion()) }); }
+        catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      if (p === '/api/content/installed' && req.method === 'GET') {
+        const folder = contentFolder(detectLoader());
+        let files = [];
+        try { files = fs.readdirSync(folder).filter(f => f.endsWith('.jar')).map(f => ({ name: f, sizeMB: +(fs.statSync(path.join(folder, f)).size / 1048576).toFixed(2) })); } catch {}
+        return json(res, 200, { folder, files });
+      }
+      if (p === '/api/content/install' && req.method === 'POST') {
+        const { slug } = await readBody(req);
+        if (!slug) return json(res, 400, { error: 'slug vazio' });
+        try {
+          const loader = detectLoader(); const folder = contentFolder(loader);
+          const r = await modrinthResolve(slug, loader, detectMcVersion());
+          await download(r.url, path.join(folder, r.filename));
+          return json(res, 200, { ok: true, file: r.filename, version: r.version });
+        } catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      if (p === '/api/content/installed' && req.method === 'DELETE') {
+        const file = url.searchParams.get('file') || '';
+        if (!file || file.includes('/') || file.includes('..')) return json(res, 400, { error: 'arquivo invalido' });
+        try { fs.unlinkSync(path.join(contentFolder(detectLoader()), file)); return json(res, 200, { ok: true }); }
+        catch (e) { return json(res, 500, { error: e.message }); }
+      }
+      // --- compatibilidade ---
+      if (p === '/api/compat/offline' && req.method === 'POST') {
+        const { enabled } = await readBody(req);
+        writeProps({ 'online-mode': enabled ? 'false' : 'true' });
+        return json(res, 200, { ok: true, onlineMode: !enabled });
+      }
+      if (p === '/api/compat/bedrock' && req.method === 'POST') {
+        try { return json(res, 200, { ok: true, ...(await installBedrock()) }); }
+        catch (e) { return json(res, 502, { error: e.message }); }
+      }
+
       return json(res, 404, { error: 'endpoint desconhecido' });
     }
 

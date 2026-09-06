@@ -76,6 +76,16 @@ input:focus{outline:none;border-color:var(--accent)}
 .prop label{font-size:.78rem;color:var(--muted)}
 .prop input,.prop select{width:100%}
 
+/* resultados de busca / instalados */
+.results{margin-top:.8rem;display:flex;flex-direction:column;gap:.5rem}
+.result{display:flex;align-items:center;gap:.8rem;background:var(--card2);
+  border:1px solid var(--line);border-radius:8px;padding:.6rem .8rem}
+.result-body{flex:1;min-width:0}
+.result-body b{word-break:break-word}
+.result button{white-space:nowrap}
+.switch{display:flex;align-items:center;gap:.6rem;cursor:pointer;margin:.4rem 0}
+.switch input{width:18px;height:18px}
+
 /* table */
 .tbl{width:100%;border-collapse:collapse;margin-top:.8rem;font-size:.9rem}
 .tbl th,.tbl td{text-align:left;padding:.5rem .4rem;border-bottom:1px solid var(--line)}

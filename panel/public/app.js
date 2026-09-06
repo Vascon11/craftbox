@@ -21,7 +21,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
 });
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
-function showApp() { $('#app').hidden = false; loadProps(); startStatus(); startLogs(); loadBackups(); }
+function showApp() { $('#app').hidden = false; loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); }
 
 // ---- tabs ----
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
@@ -178,6 +178,66 @@ $('#bkNow').addEventListener('click', async () => {
   $('#bkMsg').textContent = ok ? '✓ backup criado' : 'erro ao fazer backup';
   $('#bkNow').disabled = false; loadBackups();
   setTimeout(() => $('#bkMsg').textContent = '', 4000);
+});
+
+// ---- conteudo (mods/plugins) ----
+let contentKind = 'plugins';
+async function loadContentInfo() {
+  const { data } = await api('/api/content/info');
+  contentKind = data.kind || 'plugins';
+  $('#contentInfo').textContent = `${data.loader || '?'} · ${contentKind} · MC ${data.mcVersion || '?'}`;
+  $('#offlineToggle').checked = data.onlineMode === false;
+}
+$('#searchForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = $('#searchIn').value.trim();
+  const box = $('#searchResults'); box.innerHTML = '<div class="muted small">buscando…</div>';
+  const { ok, data } = await api('/api/content/search?q=' + encodeURIComponent(q));
+  if (!ok) { box.innerHTML = `<div class="err small">${data.error || 'erro'}</div>`; return; }
+  if (!data.results.length) { box.innerHTML = '<div class="muted small">nada encontrado</div>'; return; }
+  box.innerHTML = '';
+  data.results.forEach(r => {
+    const el = document.createElement('div'); el.className = 'result';
+    el.innerHTML = `<div class="result-body"><b>${r.title}</b> <span class="muted small">· ${(r.downloads || 0).toLocaleString('pt-BR')} downloads</span>
+      <div class="muted small">${(r.description || '').slice(0, 120)}</div></div>`;
+    const b = document.createElement('button'); b.className = 'ok'; b.textContent = 'Instalar';
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = 'instalando…';
+      const res = await api('/api/content/install', { method: 'POST', body: JSON.stringify({ slug: r.slug }) });
+      b.textContent = res.ok ? '✓ instalado' : 'erro';
+      if (!res.ok) { b.disabled = false; b.textContent = 'Instalar'; alert(res.data.error || 'falha'); }
+      loadInstalled();
+    };
+    el.append(b); box.append(el);
+  });
+});
+async function loadInstalled() {
+  const { data } = await api('/api/content/installed');
+  const box = $('#installedList'); box.innerHTML = '';
+  const files = (data && data.files) || [];
+  if (!files.length) { box.innerHTML = '<div class="muted small">nenhum arquivo instalado.</div>'; return; }
+  files.forEach(f => {
+    const el = document.createElement('div'); el.className = 'result';
+    el.innerHTML = `<div class="result-body">${f.name} <span class="muted small">· ${f.sizeMB} MB</span></div>`;
+    const b = document.createElement('button'); b.className = 'danger'; b.textContent = 'Remover';
+    b.onclick = async () => { if (!confirm('Remover ' + f.name + '?')) return; await api('/api/content/installed?file=' + encodeURIComponent(f.name), { method: 'DELETE' }); loadInstalled(); };
+    el.append(b); box.append(el);
+  });
+}
+$('#reloadInstalled').addEventListener('click', loadInstalled);
+
+// ---- compatibilidade ----
+$('#offlineToggle').addEventListener('change', async (e) => {
+  const { ok, data } = await api('/api/compat/offline', { method: 'POST', body: JSON.stringify({ enabled: e.target.checked }) });
+  $('#offlineMsg').textContent = ok ? `✓ modo offline ${e.target.checked ? 'ATIVADO' : 'desativado'} — reinicie o servidor.` : (data.error || 'erro');
+  setTimeout(() => $('#offlineMsg').textContent = '', 5000);
+});
+$('#bedrockBtn').addEventListener('click', async () => {
+  const btn = $('#bedrockBtn'), msg = $('#bedrockMsg');
+  btn.disabled = true; msg.textContent = 'baixando Geyser + Floodgate…';
+  const { ok, data } = await api('/api/compat/bedrock', { method: 'POST' });
+  msg.textContent = ok ? `✓ instalado: ${data.installed.join(', ')} — reinicie o servidor.` : ('erro: ' + (data.error || ''));
+  btn.disabled = false; loadInstalled();
 });
 
 boot();
