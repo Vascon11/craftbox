@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+#
+# mc-install — instalador do appliance de servidor Minecraft (Arch Linux)
+# Boota, roda sozinho, e no fim entrega uma maquina dedicada a rodar MC.
+#
+set -uo pipefail
+
+# ---------------------------------------------------------------------------
+# helpers de UI
+# ---------------------------------------------------------------------------
+c_reset=$'\e[0m'; c_bold=$'\e[1m'; c_green=$'\e[32m'; c_yellow=$'\e[33m'
+c_red=$'\e[31m'; c_blue=$'\e[36m'
+say()  { printf '%s\n' "${c_blue}==>${c_reset} ${c_bold}$*${c_reset}"; }
+ok()   { printf '%s\n' "${c_green}  ok:${c_reset} $*"; }
+warn() { printf '%s\n' "${c_yellow}  aviso:${c_reset} $*"; }
+die()  { printf '%s\n' "${c_red}  ERRO:${c_reset} $*" >&2; exit 1; }
+ask()  { local p="$1" d="${2:-}" r; if [ -n "$d" ]; then read -rp "  $p [$d]: " r; echo "${r:-$d}"; else read -rp "  $p: " r; echo "$r"; fi; }
+askpw(){ local p="$1" r; read -rsp "  $p: " r; echo >&2; printf '%s' "$r"; }
+yesno(){ local p="$1" d="${2:-s}" r; read -rp "  $p (s/n) [$d]: " r; r="${r:-$d}"; [[ "$r" =~ ^[sSyY] ]]; }
+
+clear
+cat <<'BANNER'
+  ================================================================
+   INSTALADOR — Servidor Minecraft (Arch Linux appliance)
+   Dell Inspiron 3442  ·  i5-4210U  ·  build vascon1
+  ================================================================
+BANNER
+echo
+warn "Este processo APAGA um disco inteiro. Leia cada passo com atencao."
+echo
+yesno "Quer continuar?" s || { echo "Cancelado."; exec bash; }
+
+# ---------------------------------------------------------------------------
+# 1) Rede (precisa de internet pra baixar sistema + Minecraft)
+# ---------------------------------------------------------------------------
+setup_net() {
+  say "Configurando rede"
+  if ping -c1 -W3 archlinux.org &>/dev/null; then ok "Internet ja disponivel (cabo/DHCP)"; return 0; fi
+  warn "Sem internet automatica. Vamos configurar."
+  local wl; wl=$(ls /sys/class/net 2>/dev/null | grep -E '^wl' | head -1 || true)
+  if [ -z "$wl" ]; then
+    die "Nenhuma placa Wi-Fi encontrada e o cabo nao deu internet. Conecte o cabo de rede e reinicie."
+  fi
+  ok "Placa Wi-Fi: $wl"
+  local ssid pass
+  ssid=$(ask "Nome da rede Wi-Fi (SSID)")
+  pass=$(askpw "Senha do Wi-Fi")
+  say "Conectando em '$ssid'..."
+  iwctl --passphrase "$pass" station "$wl" connect "$ssid" || warn "iwctl retornou erro, testando mesmo assim..."
+  for i in $(seq 1 15); do ping -c1 -W2 archlinux.org &>/dev/null && break; sleep 1; done
+  ping -c1 -W3 archlinux.org &>/dev/null || die "Nao consegui internet pelo Wi-Fi. Confira SSID/senha."
+  ok "Conectado. (guardo essa rede pro sistema instalado)"
+  WIFI_SSID="$ssid"; WIFI_PASS="$pass"
+}
+WIFI_SSID=""; WIFI_PASS=""
+setup_net
+
+# sincroniza relogio (importante pra TLS/downloads)
+timedatectl set-ntp true 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 2) Disco de destino
+# ---------------------------------------------------------------------------
+say "Discos disponiveis:"
+lsblk -dpo NAME,SIZE,MODEL | grep -vE 'loop|sr0'
+echo
+DISK=$(ask "Disco onde instalar (CUIDADO: sera apagado)" "/dev/sda")
+[ -b "$DISK" ] || die "Disco $DISK nao existe."
+echo
+warn "TUDO em $DISK sera destruido:"
+lsblk "$DISK"
+echo
+yesno "Confirma apagar $DISK inteiro?" n || die "Abortado pelo usuario."
+
+# ---------------------------------------------------------------------------
+# 3) Perguntas de configuracao
+# ---------------------------------------------------------------------------
+say "Configuracao do sistema"
+HOSTNAME=$(ask "Nome da maquina (hostname)" "mc-server")
+USERNAME=$(ask "Seu usuario (login SSH)" "vascon1")
+while :; do
+  USERPW=$(askpw "Senha do usuario $USERNAME")
+  USERPW2=$(askpw "Repita a senha")
+  [ "$USERPW" = "$USERPW2" ] && [ -n "$USERPW" ] && break
+  warn "Senhas nao batem ou vazia, tente de novo."
+done
+SSHKEY=$(ask "Cole sua chave SSH publica (opcional, enter pra pular)" "")
+
+say "Configuracao do Minecraft"
+echo "  1) Paper  (plugins - leve, recomendado pro seu hardware)"
+echo "  2) Fabric (mods - mais pesado, voce e amigos instalam mods no cliente)"
+MCTYPE=""
+while [ -z "$MCTYPE" ]; do
+  case "$(ask "Escolha o tipo de servidor" "1")" in
+    1) MCTYPE="paper" ;;
+    2) MCTYPE="fabric" ;;
+    *) warn "Digite 1 ou 2." ;;
+  esac
+done
+MCVER=$(ask "Versao do Minecraft (enter = ultima estavel)" "latest")
+MC_MOTD=$(ask "Mensagem do servidor (MOTD)" "Servidor do vascon1 e amigos")
+MC_MAXP=$(ask "Maximo de jogadores" "8")
+MC_DIFF=$(ask "Dificuldade (peaceful/easy/normal/hard)" "normal")
+echo
+warn "Voce precisa ACEITAR a EULA da Mojang pra rodar o servidor:"
+echo "  https://aka.ms/MinecraftEULA"
+EULA="false"
+if yesno "Aceita a EULA da Mojang?" s; then EULA="true"; else warn "Sem aceitar a EULA, o servidor nao inicia (deixo instalado mas parado)."; fi
+
+# calcula heap (RAM) automaticamente
+TOTAL_MB=$(free -m | awk '/^Mem:/{print $2}')
+HEAP=$(( TOTAL_MB - 2048 ))
+[ "$HEAP" -lt 1024 ] && HEAP=1024
+[ "$HEAP" -gt 6144 ] && HEAP=6144
+ok "RAM detectada: ${TOTAL_MB}MB  ->  heap do Minecraft: ${HEAP}MB (Xms=Xmx)"
+echo
+say "Resumo:"
+echo "  Disco:      $DISK  (SERA APAGADO)"
+echo "  Hostname:   $HOSTNAME"
+echo "  Usuario:    $USERNAME"
+echo "  Servidor:   $MCTYPE  versao=$MCVER  heap=${HEAP}MB"
+echo "  EULA:       $EULA"
+echo
+yesno "Tudo certo? Iniciar instalacao?" n || die "Abortado."
+
+# ---------------------------------------------------------------------------
+# 4) Particionamento (UEFI: ESP + root ext4)
+# ---------------------------------------------------------------------------
+say "Particionando $DISK"
+wipefs -af "$DISK"
+sgdisk -Z "$DISK"
+sgdisk -n1:0:+512M -t1:ef00 -c1:ESP "$DISK"
+sgdisk -n2:0:0     -t2:8300 -c2:root "$DISK"
+partprobe "$DISK"; sleep 2
+if [[ "$DISK" == *nvme* || "$DISK" == *mmcblk* ]]; then P1="${DISK}p1"; P2="${DISK}p2"; else P1="${DISK}1"; P2="${DISK}2"; fi
+ok "ESP=$P1  root=$P2"
+
+say "Formatando"
+mkfs.fat -F32 -n ESP "$P1"
+mkfs.ext4 -F -L root "$P2"
+
+say "Montando"
+mount "$P2" /mnt
+mkdir -p /mnt/boot
+mount "$P1" /mnt/boot
+
+# ---------------------------------------------------------------------------
+# 5) Instalacao do sistema base
+# ---------------------------------------------------------------------------
+say "Instalando sistema base (isso demora um pouco no HD)"
+pacstrap -K /mnt \
+  base linux linux-firmware mkinitcpio intel-ucode \
+  networkmanager openssh sudo \
+  jre21-openjdk-headless \
+  git tmux nano vim htop jq curl wget which \
+  || die "pacstrap falhou (rede?)."
+
+say "Gerando fstab"
+genfstab -U /mnt >> /mnt/etc/fstab
+
+# ---------------------------------------------------------------------------
+# 6) Baixando o Minecraft (feito aqui no live, que tem curl+jq)
+# ---------------------------------------------------------------------------
+MCDIR=/mnt/opt/minecraft
+mkdir -p "$MCDIR/mods" "$MCDIR/backups"
+say "Baixando servidor ($MCTYPE)"
+UA="mc-install/1.0 (vascon1 minecraft appliance)"
+if [ "$MCTYPE" = "paper" ]; then
+  # API nova do Paper (fill v3); pega a ultima versao ESTAVEL (ignora rc/pre/snapshot)
+  if [ "$MCVER" = "latest" ]; then
+    MCVER=$(curl -fsSL -A "$UA" https://fill.papermc.io/v3/projects/paper \
+            | jq -r '[.versions[][] | select(test("-")|not)][0]')
+  fi
+  DLINFO=$(curl -fsSL -A "$UA" "https://fill.papermc.io/v3/projects/paper/versions/$MCVER/builds/latest")
+  BUILD=$(echo "$DLINFO" | jq -r '.id')
+  URL=$(echo "$DLINFO"   | jq -r '.downloads."server:default".url')
+  if [ -n "$URL" ] && [ "$URL" != "null" ]; then
+    curl -fL --retry 3 -A "$UA" -o "$MCDIR/server.jar" "$URL" \
+      && ok "Paper $MCVER build $BUILD" || warn "Falha ao baixar Paper; baixe depois manualmente."
+  else
+    warn "Nao achei build de Paper pra versao '$MCVER'. Baixe depois manualmente em papermc.io/downloads"
+  fi
+else
+  if [ "$MCVER" = "latest" ]; then
+    MCVER=$(curl -fsSL https://meta.fabricmc.net/v2/versions/game | jq -r '[.[]|select(.stable==true)][0].version')
+  fi
+  LOADER=$(curl -fsSL https://meta.fabricmc.net/v2/versions/loader | jq -r '[.[]|select(.stable==true)][0].version')
+  INST=$(curl -fsSL https://meta.fabricmc.net/v2/versions/installer | jq -r '[.[]|select(.stable==true)][0].version')
+  curl -fL --retry 3 -o "$MCDIR/server.jar" \
+    "https://meta.fabricmc.net/v2/versions/loader/$MCVER/$LOADER/$INST/server/jar" \
+    && ok "Fabric server $MCVER (loader $LOADER)" || warn "Falha ao baixar Fabric."
+  say "Baixando mods de performance (best-effort)"
+  for slug in fabric-api lithium ferrite-core krypton c2me-fabric; do
+    url=$(curl -fsSL "https://api.modrinth.com/v2/project/$slug/version?loaders=%5B%22fabric%22%5D&game_versions=%5B%22$MCVER%22%5D" \
+          | jq -r '.[0].files[]? | select(.primary==true) | .url' 2>/dev/null | head -1)
+    if [ -n "${url:-}" ] && [ "$url" != "null" ]; then
+      curl -fL --retry 2 -o "$MCDIR/mods/$slug.jar" "$url" && ok "mod: $slug" || warn "pulei $slug"
+    else
+      warn "sem build de '$slug' pra $MCVER, pulei"
+    fi
+  done
+fi
+
+# arquivos de config do servidor
+cat > "$MCDIR/eula.txt" <<EOF
+# gerado pelo instalador — https://aka.ms/MinecraftEULA
+eula=$EULA
+EOF
+
+cat > "$MCDIR/server.properties" <<EOF
+# Ajustado para CPU fraca (i5-4210U). Edite depois se quiser.
+motd=$MC_MOTD
+max-players=$MC_MAXP
+difficulty=$MC_DIFF
+online-mode=true
+view-distance=6
+simulation-distance=4
+network-compression-threshold=256
+enable-command-block=true
+spawn-protection=0
+enable-rcon=true
+rcon.port=25575
+rcon.password=$(head -c8 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c12)
+server-port=25565
+EOF
+
+# script de start com flags do Aikar
+cat > "$MCDIR/start.sh" <<EOF
+#!/usr/bin/env bash
+cd /opt/minecraft
+exec /usr/lib/jvm/java-21-openjdk/bin/java \\
+  -Xms${HEAP}M -Xmx${HEAP}M \\
+  -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \\
+  -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch \\
+  -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M \\
+  -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 \\
+  -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 \\
+  -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 \\
+  -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 \\
+  -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true \\
+  -jar server.jar --nogui
+EOF
+chmod +x "$MCDIR/start.sh"
+
+# script de backup do mundo
+cat > "$MCDIR/backup.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/minecraft
+ts=$(date +%Y%m%d-%H%M)
+tar czf "backups/world-$ts.tar.gz" world world_nether world_the_end 2>/dev/null || \
+  tar czf "backups/world-$ts.tar.gz" world 2>/dev/null || true
+# mantem os 7 backups mais recentes
+ls -1t backups/world-*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm -f
+EOF
+chmod +x "$MCDIR/backup.sh"
+
+# ---------------------------------------------------------------------------
+# 7) Configuracao dentro do sistema (chroot)
+# ---------------------------------------------------------------------------
+say "Configurando sistema instalado"
+
+# rede persistente: se usou Wi-Fi, cria conexao do NetworkManager
+if [ -n "$WIFI_SSID" ]; then
+  mkdir -p /mnt/etc/NetworkManager/system-connections
+  cat > /mnt/etc/NetworkManager/system-connections/mc-wifi.nmconnection <<EOF
+[connection]
+id=mc-wifi
+type=wifi
+autoconnect=true
+[wifi]
+ssid=$WIFI_SSID
+mode=infrastructure
+[wifi-security]
+key-mgmt=wpa-psk
+psk=$WIFI_PASS
+[ipv4]
+method=auto
+[ipv6]
+method=auto
+EOF
+  chmod 600 /mnt/etc/NetworkManager/system-connections/mc-wifi.nmconnection
+fi
+
+# tampa fechada nao desliga
+mkdir -p /mnt/etc/systemd/logind.conf.d
+cat > /mnt/etc/systemd/logind.conf.d/lid.conf <<EOF
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
+EOF
+
+# servico do minecraft
+cat > /mnt/etc/systemd/system/minecraft.service <<EOF
+[Unit]
+Description=Servidor Minecraft ($MCTYPE)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=minecraft
+Group=minecraft
+WorkingDirectory=/opt/minecraft
+ExecStart=/opt/minecraft/start.sh
+Restart=on-failure
+RestartSec=15
+# Paper/vanilla salvam o mundo ao receber SIGTERM
+KillSignal=SIGTERM
+TimeoutStopSec=90
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# backup diario
+cat > /mnt/etc/systemd/system/mc-backup.service <<EOF
+[Unit]
+Description=Backup do mundo do Minecraft
+[Service]
+Type=oneshot
+User=minecraft
+ExecStart=/opt/minecraft/backup.sh
+EOF
+cat > /mnt/etc/systemd/system/mc-backup.timer <<EOF
+[Unit]
+Description=Backup diario do mundo do Minecraft
+[Timer]
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+
+# mensagem de boas-vindas por SSH
+cat > /mnt/etc/motd <<EOF
+
+  Servidor Minecraft ($MCTYPE) — $HOSTNAME
+  ---------------------------------------------
+  status:   systemctl status minecraft
+  logs:     journalctl -u minecraft -f
+  console:  screen -r  (nao configurado por padrao — use RCON)
+  reiniciar:sudo systemctl restart minecraft
+  backup:   /opt/minecraft/backup.sh
+  pasta:    /opt/minecraft
+
+EOF
+
+# script de configuracao que roda dentro do chroot
+cat > /mnt/root/chroot-setup.sh <<CHROOT
+#!/usr/bin/env bash
+set -euo pipefail
+ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
+hwclock --systohc || true
+sed -i 's/^#\(pt_BR.UTF-8\)/\1/; s/^#\(en_US.UTF-8\)/\1/' /etc/locale.gen
+locale-gen
+echo 'LANG=pt_BR.UTF-8' > /etc/locale.conf
+echo 'KEYMAP=br-abnt2' > /etc/vconsole.conf
+echo '$HOSTNAME' > /etc/hostname
+cat > /etc/hosts <<HOSTS
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+HOSTS
+
+# usuario + sudo
+useradd -m -G wheel -s /bin/bash '$USERNAME'
+echo '$USERNAME:$USERPW' | chpasswd
+passwd -l root
+echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
+chmod 440 /etc/sudoers.d/wheel
+
+# chave SSH opcional
+if [ -n '$SSHKEY' ]; then
+  install -d -m700 -o '$USERNAME' -g '$USERNAME' /home/$USERNAME/.ssh
+  echo '$SSHKEY' > /home/$USERNAME/.ssh/authorized_keys
+  chmod 600 /home/$USERNAME/.ssh/authorized_keys
+  chown $USERNAME:$USERNAME /home/$USERNAME/.ssh/authorized_keys
+fi
+
+# usuario de servico do minecraft
+useradd -r -m -d /opt/minecraft -s /usr/bin/nologin minecraft || true
+chown -R minecraft:minecraft /opt/minecraft
+chmod +x /opt/minecraft/start.sh /opt/minecraft/backup.sh
+
+# bootloader systemd-boot (UEFI)
+bootctl install
+ROOT_UUID=\$(blkid -s PARTUUID -o value $P2)
+cat > /boot/loader/loader.conf <<LOADER
+default arch.conf
+timeout 1
+console-mode max
+editor no
+LOADER
+cat > /boot/loader/entries/arch.conf <<ENTRY
+title   Minecraft Server (Arch)
+linux   /vmlinuz-linux
+initrd  /intel-ucode.img
+initrd  /initramfs-linux.img
+options root=PARTUUID=\$ROOT_UUID rw quiet
+ENTRY
+
+# habilita servicos
+systemctl enable NetworkManager sshd systemd-timesyncd minecraft mc-backup.timer
+
+# regenera initramfs por garantia
+mkinitcpio -P
+CHROOT
+chmod +x /mnt/root/chroot-setup.sh
+
+arch-chroot /mnt /root/chroot-setup.sh || die "Configuracao no chroot falhou."
+rm -f /mnt/root/chroot-setup.sh
+
+# ---------------------------------------------------------------------------
+# 8) Fim
+# ---------------------------------------------------------------------------
+say "Finalizando"
+sync
+umount -R /mnt || true
+echo
+ok "INSTALACAO CONCLUIDA!"
+echo
+echo "  Ao reiniciar, o servidor Minecraft sobe sozinho na porta 25565."
+echo "  Acesse via SSH:  ssh $USERNAME@<ip-do-servidor>"
+echo "  Ver status:      systemctl status minecraft"
+echo
+if yesno "Reiniciar agora? (tire o pendrive quando apagar a tela)" s; then
+  reboot
+else
+  echo "Ok, digite 'reboot' quando quiser."
+  exec bash
+fi

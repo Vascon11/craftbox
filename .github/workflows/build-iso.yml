@@ -1,0 +1,46 @@
+name: Build ISO
+
+on:
+  push:
+    tags: ["v*"]        # ao criar uma tag vX.Y.Z -> gera ISO e publica Release
+  workflow_dispatch: {}  # permite rodar manualmente pela aba Actions
+
+permissions:
+  contents: write        # necessario pra criar Releases
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ISO (Arch container)
+        run: |
+          mkdir -p out
+          docker run --rm --privileged \
+            -v "$PWD":/build \
+            -v "$PWD/out":/out \
+            docker.io/library/archlinux:latest \
+            bash /build/scripts/build-in-container.sh
+
+      - name: Lista artefatos
+        run: ls -lh out/
+
+      - name: Upload artifact (sempre)
+        uses: actions/upload-artifact@v4
+        with:
+          name: craftbox-iso
+          path: |
+            out/*.iso
+            out/*.sha256
+          retention-days: 14
+
+      - name: Publica Release (apenas em tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.iso
+            out/*.sha256
+          generate_release_notes: true

@@ -1,0 +1,6 @@
+# saida do build (ISOs sao grandes demais pro git; vao pros Releases)
+out/
+work/
+*.iso
+*.sha256
+*.log
