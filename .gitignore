@@ -4,3 +4,6 @@ work/
 *.iso
 *.sha256
 *.log
+
+# painel: config com hash de senha e segredo de sessao
+panel/config.json

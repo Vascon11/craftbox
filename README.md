@@ -27,6 +27,13 @@ Sem ambiente gráfico, sem peso: toda a RAM sobra pro jogo.
 
 > Todas as telas acima são de uma instalação real do craftbox, validada numa máquina virtual UEFI (QEMU/KVM).
 
+### Painel web — `craftbox-panel`
+
+Um painel web opcional (**Node.js puro, zero dependências**) pra configurar e gerenciar o servidor pelo navegador: status + stats do sistema (CPU, RAM, disco, temperatura), ligar/reiniciar/desligar, editor visual do `server.properties`, console RCON, logs ao vivo e backups — com login por senha. Veja [`panel/`](panel/).
+
+![Painel — dashboard](screenshots/painel-dashboard.jpg)
+![Painel — configuração](screenshots/painel-config.jpg)
+
 ---
 
 ## Por que existe

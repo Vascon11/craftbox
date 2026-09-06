@@ -1,0 +1,18 @@
+[Unit]
+Description=craftbox-panel (painel web do servidor Minecraft)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# roda como o mesmo usuario do servidor (acesso direto a /opt/minecraft)
+User=minecraft
+Group=minecraft
+WorkingDirectory=/opt/craftbox-panel
+ExecStart=/usr/bin/node /opt/craftbox-panel/server.js
+Restart=on-failure
+RestartSec=10
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,82 @@
+:root{
+  --bg:#0f1216; --card:#171c22; --card2:#1e252d; --line:#2a323c;
+  --txt:#e6edf3; --muted:#8b98a5; --accent:#4ade80; --accent2:#22c55e;
+  --warn:#fbbf24; --danger:#f87171; --blue:#38bdf8;
+  --radius:12px;
+}
+@media (prefers-color-scheme: light){
+  :root{ --bg:#f5f7fa; --card:#ffffff; --card2:#f0f3f6; --line:#dde3ea;
+    --txt:#1a2027; --muted:#5a6672; --accent:#16a34a; }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--txt);
+  font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+h3{margin:0 0 .6rem;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.muted{color:var(--muted)} .small{font-size:.8rem} .unit{font-size:.9rem;color:var(--muted)}
+.err{color:var(--danger)} code{background:var(--card2);padding:.1em .35em;border-radius:4px}
+
+/* login */
+.login{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg)}
+.login-card{width:min(340px,90vw);text-align:center;padding:2rem}
+.login-card .brand{font-size:1.6rem;margin-bottom:.2rem}
+.login-card input{width:100%;margin:1rem 0 .8rem}
+
+/* header */
+header{display:flex;align-items:center;gap:1rem;padding:.7rem 1.2rem;
+  background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+.brand{font-weight:700;font-size:1.05rem}
+nav{display:flex;gap:.2rem;margin-left:auto;flex-wrap:wrap}
+.tab{background:transparent;border:none;color:var(--muted);padding:.5rem .8rem;border-radius:8px;cursor:pointer;font-size:.9rem}
+.tab:hover{color:var(--txt);background:var(--card2)}
+.tab.active{color:var(--txt);background:var(--card2);font-weight:600}
+.status-pill{display:flex;align-items:center;gap:.4rem;background:var(--card2);
+  padding:.3rem .7rem;border-radius:20px;font-size:.85rem}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+.dot.on{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.dot.off{background:var(--danger)}
+.dot.act{background:var(--warn)}
+
+/* layout */
+main{padding:1.2rem;max-width:1100px;margin:0 auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:1.1rem}
+.big{font-size:2rem;font-weight:700;line-height:1.1}
+.row{display:flex;gap:.5rem;align-items:center;margin-top:.8rem;flex-wrap:wrap}
+.row.spread{justify-content:space-between;margin-top:0}
+
+/* controls */
+button{background:var(--card2);color:var(--txt);border:1px solid var(--line);
+  padding:.5rem .9rem;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600}
+button:hover{border-color:var(--muted)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.ok{background:var(--accent2);border-color:var(--accent2);color:#04120a}
+button.warn{background:var(--warn);border-color:var(--warn);color:#241a02}
+button.danger{background:var(--danger);border-color:var(--danger);color:#2a0606}
+button.ghost{background:transparent}
+input{background:var(--bg);color:var(--txt);border:1px solid var(--line);
+  padding:.55rem .7rem;border-radius:8px;font-size:.9rem}
+input:focus{outline:none;border-color:var(--accent)}
+
+/* bars */
+.bar{height:8px;background:var(--card2);border-radius:4px;overflow:hidden;margin:.6rem 0 .3rem}
+.bar-fill{height:100%;background:var(--accent);width:0;transition:width .4s}
+.bar-fill.hot{background:var(--danger)}
+
+/* terminal */
+.term{background:#0a0d10;color:#c8d3de;border:1px solid var(--line);border-radius:8px;
+  padding:.8rem;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;
+  overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-word;margin:.6rem 0}
+.term.tall{max-height:60vh}
+#rconIn{flex:1}
+
+/* props form */
+.props{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:.7rem;margin:.8rem 0}
+.prop{display:flex;flex-direction:column;gap:.2rem}
+.prop label{font-size:.78rem;color:var(--muted)}
+.prop input,.prop select{width:100%}
+
+/* table */
+.tbl{width:100%;border-collapse:collapse;margin-top:.8rem;font-size:.9rem}
+.tbl th,.tbl td{text-align:left;padding:.5rem .4rem;border-bottom:1px solid var(--line)}
+.tbl th{color:var(--muted);font-weight:600;font-size:.78rem}

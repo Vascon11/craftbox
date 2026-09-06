@@ -152,7 +152,7 @@ pacstrap -K /mnt \
   base linux linux-firmware mkinitcpio intel-ucode \
   networkmanager openssh sudo \
   jre-openjdk-headless \
-  git tmux nano vim htop jq curl wget which \
+  git tmux nano vim htop jq curl wget which nodejs \
   || die "pacstrap falhou (rede?)."
 
 say "Gerando fstab"

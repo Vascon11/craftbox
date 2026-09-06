@@ -1,0 +1,9 @@
+{
+  "port": 8080,
+  "host": "0.0.0.0",
+  "mcDir": "/opt/minecraft",
+  "service": "minecraft",
+  "rcon": { "host": "127.0.0.1", "port": 25575, "password": "" },
+  "auth": { "salt": "", "hash": "" },
+  "sessionSecret": ""
+}

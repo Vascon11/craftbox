@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>craftbox · painel</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- Login -->
+<div id="login" class="login" hidden>
+  <form id="loginForm" class="card login-card">
+    <div class="brand">🧱 craftbox</div>
+    <p class="muted">Painel do servidor Minecraft</p>
+    <input type="password" id="pw" placeholder="Senha" autocomplete="current-password" required>
+    <button type="submit">Entrar</button>
+    <div id="loginErr" class="err" hidden></div>
+  </form>
+</div>
+
+<!-- App -->
+<div id="app" hidden>
+  <header>
+    <div class="brand">🧱 craftbox</div>
+    <div class="status-pill" id="pill"><span class="dot" id="dot"></span><span id="pillText">—</span></div>
+    <nav>
+      <button class="tab active" data-tab="painel">Painel</button>
+      <button class="tab" data-tab="config">Configuração</button>
+      <button class="tab" data-tab="console">Console</button>
+      <button class="tab" data-tab="logs">Logs</button>
+      <button class="tab" data-tab="backups">Backups</button>
+    </nav>
+    <button id="logout" class="ghost" title="Sair">Sair</button>
+  </header>
+
+  <main>
+    <!-- PAINEL -->
+    <section id="painel" class="panel">
+      <div class="grid">
+        <div class="card">
+          <h3>Servidor</h3>
+          <div class="big" id="svcState">—</div>
+          <div class="muted" id="svcMeta">—</div>
+          <div class="row">
+            <button id="btnStart" class="ok">Ligar</button>
+            <button id="btnRestart" class="warn">Reiniciar</button>
+            <button id="btnStop" class="danger">Desligar</button>
+          </div>
+          <div id="powerMsg" class="muted small"></div>
+        </div>
+        <div class="card">
+          <h3>Jogadores</h3>
+          <div class="big" id="players">—</div>
+          <div class="muted">online / máximo</div>
+        </div>
+        <div class="card">
+          <h3>CPU</h3>
+          <div class="big"><span id="cpuFreq">—</span> <span class="unit">MHz</span></div>
+          <div class="muted" id="cpuMeta">—</div>
+          <div id="cpuWarn" class="err small" hidden></div>
+        </div>
+        <div class="card">
+          <h3>Memória</h3>
+          <div class="big"><span id="memUsed">—</span> <span class="unit">MB</span></div>
+          <div class="bar"><div id="memBar" class="bar-fill"></div></div>
+          <div class="muted" id="memMeta">—</div>
+        </div>
+        <div class="card">
+          <h3>Disco (mundo)</h3>
+          <div class="big"><span id="diskUsed">—</span> <span class="unit">GB</span></div>
+          <div class="bar"><div id="diskBar" class="bar-fill"></div></div>
+          <div class="muted" id="diskMeta">—</div>
+        </div>
+        <div class="card">
+          <h3>Temperatura</h3>
+          <div class="big"><span id="temp">—</span> <span class="unit">°C</span></div>
+          <div class="muted" id="loadMeta">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CONFIG -->
+    <section id="config" class="panel" hidden>
+      <div class="card">
+        <div class="row spread">
+          <h3>server.properties</h3>
+          <div>
+            <button id="cfgReload" class="ghost">Recarregar</button>
+            <button id="cfgSave" class="ok">Salvar</button>
+          </div>
+        </div>
+        <p class="muted small">Após salvar, reinicie o servidor pra aplicar. Campos comuns aparecem primeiro.</p>
+        <div id="propsForm" class="props"></div>
+        <div id="cfgMsg" class="muted small"></div>
+      </div>
+    </section>
+
+    <!-- CONSOLE -->
+    <section id="console" class="panel" hidden>
+      <div class="card">
+        <h3>Console (RCON)</h3>
+        <p class="muted small">Envia comandos ao servidor em execução. Ex.: <code>list</code>, <code>say olá</code>, <code>op fulano</code>, <code>weather clear</code>.</p>
+        <pre id="rconOut" class="term"></pre>
+        <form id="rconForm" class="row">
+          <input type="text" id="rconIn" placeholder="digite um comando (sem a barra /)" autocomplete="off">
+          <button type="submit">Enviar</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- LOGS -->
+    <section id="logs" class="panel" hidden>
+      <div class="card">
+        <div class="row spread">
+          <h3>Logs</h3>
+          <label class="muted small"><input type="checkbox" id="autolog" checked> auto-atualizar</label>
+        </div>
+        <pre id="logOut" class="term tall"></pre>
+      </div>
+    </section>
+
+    <!-- BACKUPS -->
+    <section id="backups" class="panel" hidden>
+      <div class="card">
+        <div class="row spread">
+          <h3>Backups do mundo</h3>
+          <button id="bkNow" class="ok">Fazer backup agora</button>
+        </div>
+        <div id="bkMsg" class="muted small"></div>
+        <table class="tbl"><thead><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th></tr></thead>
+          <tbody id="bkBody"></tbody></table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
