@@ -11,6 +11,24 @@ Sem ambiente gráfico, sem peso: toda a RAM sobra pro jogo.
 
 ---
 
+## Interface
+
+**Instalador** — abre sozinho no boot e cuida de tudo: escolha de Paper/Fabric, rede, EULA e dimensionamento automático de RAM.
+
+![Instalador do craftbox](screenshots/instalador.png)
+
+**Sistema instalado** — o appliance recebe você por SSH com um resumo dos comandos (MOTD):
+
+![MOTD do sistema](screenshots/sistema-motd.png)
+
+**Servidor no ar** — Paper rodando sob Java 26, com as portas 25565 (jogo) e 25575 (RCON) escutando:
+
+![Servidor rodando](screenshots/servidor-rodando.png)
+
+> Todas as telas acima são de uma instalação real do craftbox, validada numa máquina virtual UEFI (QEMU/KVM).
+
+---
+
 ## Por que existe
 
 Nasceu de um caso real: um **Dell Inspiron 3442** (Intel i5-4210U, 4–8 GB DDR3, HD 5400 rpm) parado numa gaveta. Em vez de virar lixo eletrônico, virou servidor de Minecraft pros amigos. O `craftbox` é o resultado empacotado pra qualquer notebook antigo do mesmo porte.

@@ -151,7 +151,7 @@ say "Instalando sistema base (isso demora um pouco no HD)"
 pacstrap -K /mnt \
   base linux linux-firmware mkinitcpio intel-ucode \
   networkmanager openssh sudo \
-  jre21-openjdk-headless \
+  jre-openjdk-headless \
   git tmux nano vim htop jq curl wget which \
   || die "pacstrap falhou (rede?)."
 
@@ -228,7 +228,7 @@ EOF
 cat > "$MCDIR/start.sh" <<EOF
 #!/usr/bin/env bash
 cd /opt/minecraft
-exec /usr/lib/jvm/java-21-openjdk/bin/java \\
+exec /usr/bin/java \\
   -Xms${HEAP}M -Xmx${HEAP}M \\
   -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \\
   -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch \\
