@@ -1,7 +1,13 @@
 'use strict';
 const $ = (s) => document.querySelector(s);
+let currentServer = '';
 const api = async (path, opts = {}) => {
-  const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  let url = path;
+  const skip = path === '/api/login' || path === '/api/logout' || path === '/api/authcheck' || path.startsWith('/api/servers');
+  if (currentServer && path.startsWith('/api/') && !skip) {
+    url += (path.includes('?') ? '&' : '?') + 'server=' + encodeURIComponent(currentServer);
+  }
+  const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
   let data = {}; try { data = await r.json(); } catch {}
   return { ok: r.ok, status: r.status, data };
 };
@@ -21,7 +27,61 @@ $('#loginForm').addEventListener('submit', async (e) => {
 });
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
-function showApp() { $('#app').hidden = false; loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); }
+async function showApp() { $('#app').hidden = false; await loadServers(); reloadAll(); }
+function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); }
+
+// ---- multi-servidor ----
+async function loadServers() {
+  const { ok, data } = await api('/api/servers');
+  const wrap = $('#serverBar');
+  if (!ok || !data.multi) { if (wrap) wrap.hidden = true; currentServer = ''; return; }
+  wrap.hidden = false;
+  currentServer = data.activeId || (data.servers[0] && data.servers[0].id) || '';
+  const sel = $('#serverSelect'); sel.innerHTML = '';
+  data.servers.forEach(s => {
+    const label = `${s.name} · ${s.loader}${s.mcVersion ? ' ' + s.mcVersion : ''}${s.active === 'active' ? ' 🟢' : ''}`;
+    const o = new Option(label, s.id); sel.add(o);
+  });
+  sel.value = currentServer;
+}
+async function switchServer(id) {
+  await api('/api/servers/select', { method: 'POST', body: JSON.stringify({ id }) });
+  currentServer = id;
+  reloadAll();
+}
+async function renderServerManager() {
+  const { data } = await api('/api/servers');
+  const box = $('#srvList'); box.innerHTML = '';
+  (data.servers || []).forEach(s => {
+    const el = document.createElement('div'); el.className = 'inst-row';
+    const mp = s.modpack;
+    el.innerHTML = `
+      <div class="inst-meta">
+        <div class="inst-title">${esc(s.name)} ${s.active === 'active' ? '<span class="tag">no ar</span>' : ''} ${s.selected ? '<span class="tag">selecionado</span>' : ''}</div>
+        <div class="muted small">${esc(s.loader)}${s.mcVersion ? ' ' + esc(s.mcVersion) : ''} · porta ${s.port || '?'} · id <code>${esc(s.id)}</code></div>
+        ${mp ? `<div class="muted small" style="margin-top:.25rem">📦 modpack: <a href="${esc(mp.url)}" target="_blank" rel="noopener">${esc(mp.name)}</a> v${esc(mp.version)} — <b>jogadores instalam este pack no cliente</b> <button class="ghost sm btn-copy" data-url="${esc(mp.url)}">copiar link</button></div>` : ''}
+      </div>
+      <div class="inst-actions">
+        <button class="ghost sm btn-clone">Clonar</button>
+        <button class="danger sm btn-del">Apagar</button>
+      </div>`;
+    const cp = el.querySelector('.btn-copy');
+    if (cp) cp.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(cp.dataset.url); toast('Link do pack copiado — manda pros jogadores.'); };
+    el.querySelector('.btn-clone').onclick = async () => {
+      const nome = prompt('Nome da cópia:', s.name + ' (cópia)'); if (!nome) return;
+      const r = await api('/api/servers/clone', { method: 'POST', body: JSON.stringify({ id: s.id, name: nome }) });
+      if (!r.ok) return alert(r.data.error || 'falha ao clonar');
+      toast('Servidor clonado.'); await loadServers(); renderServerManager();
+    };
+    el.querySelector('.btn-del').onclick = async () => {
+      if (!confirm(`Apagar o servidor "${s.name}"? Isso remove o mundo e tudo dele. Não dá pra desfazer.`)) return;
+      const r = await api('/api/servers?id=' + encodeURIComponent(s.id), { method: 'DELETE' });
+      if (!r.ok) return alert(r.data.error || 'falha ao apagar');
+      toast('Servidor apagado.'); await loadServers(); reloadAll(); renderServerManager();
+    };
+    box.append(el);
+  });
+}
 
 // ---- tabs ----
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
@@ -38,10 +98,12 @@ async function refreshStatus() {
   if (!ok) return;
   const active = data.active;
   const dot = $('#dot'), pillText = $('#pillText');
-  dot.className = 'dot ' + (active === 'active' ? 'on' : active === 'activating' ? 'act' : 'off');
-  pillText.textContent = active === 'active' ? 'no ar' : active === 'activating' ? 'iniciando…' : 'parado';
-  $('#svcState').textContent = active === 'active' ? 'No ar' : active === 'activating' ? 'Iniciando…' : 'Parado';
-  $('#svcMeta').textContent = active === 'active' ? `há ${fmtDur(data.uptime)}` : '—';
+  dot.className = 'dot ' + (active === 'active' ? 'on' : active === 'activating' ? 'act' : 'idle');
+  pillText.textContent = active === 'active' ? 'no ar' : active === 'activating' ? 'iniciando…' : 'desligado';
+  $('#svcState').textContent = active === 'active' ? 'No ar' : active === 'activating' ? 'Iniciando…' : 'Desligado';
+  $('#svcMeta').textContent = active === 'active'
+    ? `no ar há ${fmtDur(data.uptime)}${data.players ? ` · ${data.players.online} jogador(es)` : ' · sem jogadores'}`
+    : (active === 'activating' ? 'subindo o servidor…' : 'servidor desligado — clique em Ligar pra iniciar');
   $('#players').textContent = data.players ? `${data.players.online} / ${data.players.max}` : (active === 'active' ? '0 / ?' : '—');
 
   const s = data.system || {};
@@ -73,11 +135,15 @@ function startStatus() { refreshStatus(); clearInterval(statusTimer); statusTime
 // ---- power ----
 async function power(action, btn) {
   const msg = $('#powerMsg');
+  const labels = { start: 'ligando', restart: 'reiniciando', stop: 'desligando' };
   document.querySelectorAll('#painel button').forEach(b => b.disabled = true);
-  msg.textContent = 'executando…';
+  msg.textContent = (labels[action] || 'executando') + '…';
   const { ok, data } = await api('/api/power', { method: 'POST', body: JSON.stringify({ action }) });
-  msg.textContent = ok ? 'ok' : ('erro: ' + (data.output || data.error || '')).slice(0, 200);
+  msg.textContent = ok
+    ? `✓ comando de ${labels[action] || action} enviado — acompanhe o estado acima`
+    : ('erro: ' + (data.output || data.error || '')).slice(0, 200);
   setTimeout(() => { document.querySelectorAll('#painel button').forEach(b => b.disabled = false); refreshStatus(); }, 1500);
+  setTimeout(() => { const m = $('#powerMsg'); if (m) m.textContent = ''; }, 6000);
 }
 $('#btnStart').addEventListener('click', () => power('start'));
 $('#btnRestart').addEventListener('click', () => power('restart'));
@@ -180,51 +246,180 @@ $('#bkNow').addEventListener('click', async () => {
   setTimeout(() => $('#bkMsg').textContent = '', 4000);
 });
 
-// ---- conteudo (mods/plugins) ----
-let contentKind = 'plugins';
+// ---- conteudo (mods/plugins) — loja estilo Prism/Modrinth ----
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtNum = (n) => { n = n || 0; if (n >= 1e6) return (n / 1e6).toFixed(1).replace('.0', '') + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1).replace('.0', '') + 'k'; return '' + n; };
+const verLabel = (v) => { v = String(v || ''); return /^v\d/i.test(v) ? v : 'v' + v; };
+const CATS = [['optimization', 'Otimização'], ['utility', 'Utilidade'], ['management', 'Administração'], ['adventure', 'Aventura'], ['worldgen', 'Mundo'], ['magic', 'Magia'], ['technology', 'Tecnologia'], ['mobs', 'Mobs'], ['economy', 'Economia'], ['social', 'Social'], ['storage', 'Armazenamento'], ['library', 'Biblioteca'], ['minigame', 'Minigame'], ['game-mechanics', 'Mecânicas']];
+const CAT_MAP = Object.fromEntries(CATS);
+const catLabel = (c) => CAT_MAP[c] || c;
+let activeCat = '';
+let updatesMap = {};
+
+function iconHtml(url, title) {
+  if (url) return `<img class="c-icon" src="${esc(url)}" alt="" loading="lazy">`;
+  return `<div class="c-icon ph">${esc((title || '?').trim().charAt(0).toUpperCase())}</div>`;
+}
+function toast(msg) {
+  let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.append(t); }
+  t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 5000);
+}
+
 async function loadContentInfo() {
   const { data } = await api('/api/content/info');
-  contentKind = data.kind || 'plugins';
-  $('#contentInfo').textContent = `${data.loader || '?'} · ${contentKind} · MC ${data.mcVersion || '?'}`;
+  $('#contentInfo').textContent = `${data.loader || '?'} · ${data.kind || ''} · MC ${data.mcVersion || '?'}`;
   $('#offlineToggle').checked = data.onlineMode === false;
+  renderChips();
+  doSearch();
 }
-$('#searchForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const q = $('#searchIn').value.trim();
-  const box = $('#searchResults'); box.innerHTML = '<div class="muted small">buscando…</div>';
-  const { ok, data } = await api('/api/content/search?q=' + encodeURIComponent(q));
-  if (!ok) { box.innerHTML = `<div class="err small">${data.error || 'erro'}</div>`; return; }
-  if (!data.results.length) { box.innerHTML = '<div class="muted small">nada encontrado</div>'; return; }
-  box.innerHTML = '';
-  data.results.forEach(r => {
-    const el = document.createElement('div'); el.className = 'result';
-    el.innerHTML = `<div class="result-body"><b>${r.title}</b> <span class="muted small">· ${(r.downloads || 0).toLocaleString('pt-BR')} downloads</span>
-      <div class="muted small">${(r.description || '').slice(0, 120)}</div></div>`;
-    const b = document.createElement('button'); b.className = 'ok'; b.textContent = 'Instalar';
-    b.onclick = async () => {
-      b.disabled = true; b.textContent = 'instalando…';
-      const res = await api('/api/content/install', { method: 'POST', body: JSON.stringify({ slug: r.slug }) });
-      b.textContent = res.ok ? '✓ instalado' : 'erro';
-      if (!res.ok) { b.disabled = false; b.textContent = 'Instalar'; alert(res.data.error || 'falha'); }
-      loadInstalled();
-    };
-    el.append(b); box.append(el);
+function renderChips() {
+  const box = $('#catChips'); if (!box || box.dataset.done) return;
+  box.dataset.done = '1';
+  const mk = (cat, label, active) => { const c = document.createElement('button'); c.type = 'button'; c.className = 'chip' + (active ? ' active' : ''); c.textContent = label; c.dataset.cat = cat; return c; };
+  box.append(mk('', 'Todos', true));
+  CATS.forEach(([slug, label]) => box.append(mk(slug, label, false)));
+  box.querySelectorAll('.chip').forEach(ch => ch.onclick = () => {
+    box.querySelectorAll('.chip').forEach(x => x.classList.remove('active'));
+    ch.classList.add('active'); activeCat = ch.dataset.cat; doSearch();
   });
-});
+}
+
+async function doSearch() {
+  const q = $('#searchIn').value.trim(), sort = $('#sortSelect').value;
+  const box = $('#searchResults'); box.innerHTML = '<div class="muted small" style="padding:1rem">buscando…</div>';
+  const qs = `q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}&category=${encodeURIComponent(activeCat)}`;
+  const { ok, data } = await api('/api/content/search?' + qs);
+  if (!ok) { box.innerHTML = `<div class="err small" style="padding:1rem">${esc(data.error || 'erro')}</div>`; return; }
+  if (!data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; return; }
+  box.innerHTML = ''; data.results.forEach(r => box.append(storeCard(r)));
+}
+function storeCard(r) {
+  const el = document.createElement('div'); el.className = 'store-card';
+  const tags = (r.categories || []).slice(0, 3).map(c => `<span class="tag">${esc(catLabel(c))}</span>`).join('');
+  el.innerHTML = `
+    <div class="store-top">
+      ${iconHtml(r.icon, r.title)}
+      <div class="store-meta">
+        <div class="store-title">${esc(r.title)}</div>
+        <div class="muted small">${r.author ? 'por ' + esc(r.author) : ''}</div>
+      </div>
+    </div>
+    <div class="store-desc muted small">${esc((r.description || '').slice(0, 150))}</div>
+    <div class="store-tags">${tags}</div>
+    <div class="store-foot">
+      <span class="muted small">⬇ ${fmtNum(r.downloads)}</span>
+      <span class="grow"></span>
+      <button class="ghost sm btn-detail">Versões</button>
+      <button class="ok sm btn-install">Instalar</button>
+    </div>`;
+  el.querySelector('.btn-install').onclick = (ev) => installSlug(r.slug, null, ev.currentTarget);
+  el.querySelector('.btn-detail').onclick = () => openModal(r.slug, r.title);
+  return el;
+}
+
+async function installSlug(slug, versionId, btn) {
+  const old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'instalando…'; }
+  const { ok, data } = await api('/api/content/install', { method: 'POST', body: JSON.stringify({ slug, versionId }) });
+  if (btn) {
+    if (ok) { btn.textContent = '✓ instalado'; }
+    else { btn.disabled = false; btn.textContent = old; alert(data.error || 'falha ao instalar'); }
+  }
+  if (ok) {
+    const deps = (data.installed || []).filter(x => x.dep).map(x => x.title);
+    toast(deps.length ? `Instalado + ${deps.length} dependência(s): ${deps.join(', ')} — reinicie o servidor.` : 'Instalado — reinicie o servidor pra aplicar.');
+    loadInstalled();
+  }
+  return ok;
+}
+
+// ---- modal de detalhes / seleção de versão ----
+async function openModal(slug, title) {
+  const ov = $('#modOverlay'), body = $('#modBody');
+  ov.hidden = false;
+  body.innerHTML = `<div class="muted" style="padding:2.5rem;text-align:center">carregando ${esc(title || slug)}…</div>`;
+  const [pj, vs] = await Promise.all([
+    api('/api/content/project?slug=' + encodeURIComponent(slug)),
+    api('/api/content/versions?slug=' + encodeURIComponent(slug)),
+  ]);
+  if (!pj.ok) { body.innerHTML = `<div class="err" style="padding:1.5rem">${esc(pj.data.error || 'erro ao carregar')}</div>`; return; }
+  const p = pj.data.project, versions = (vs.data && vs.data.versions) || [], mc = vs.data && vs.data.mcVersion;
+  const gallery = (p.gallery || []).slice(0, 4).map(u => `<img src="${esc(u)}" class="gal" loading="lazy">`).join('');
+  const opts = versions.map(v => `<option value="${esc(v.id)}">${esc(v.versionNumber)} · MC ${(v.gameVersions || []).slice(0, 3).join(', ')}${v.compatible ? ' ✓' : ''} · ${esc(v.versionType)}</option>`).join('');
+  body.innerHTML = `
+    <div class="mod-head">
+      ${iconHtml(p.icon, p.title)}
+      <div style="min-width:0">
+        <div class="mod-title">${esc(p.title)}</div>
+        <div class="muted small">⬇ ${fmtNum(p.downloads)} · ♥ ${fmtNum(p.follows)}${p.source ? ` · <a href="${esc(p.source)}" target="_blank" rel="noopener">código-fonte</a>` : ''}</div>
+        <div class="store-tags" style="margin-top:.4rem">${(p.categories || []).map(c => `<span class="tag">${esc(catLabel(c))}</span>`).join('')}</div>
+      </div>
+    </div>
+    <p class="muted small">${esc(p.description || '')}</p>
+    ${gallery ? `<div class="gallery">${gallery}</div>` : ''}
+    <div class="ver-row">
+      <label class="muted small" style="flex:1;display:flex;flex-direction:column;gap:.3rem">
+        <span>Versão pra instalar${mc ? ` (servidor roda MC ${esc(mc)})` : ''}</span>
+        <select id="verSel">${opts || '<option value="">— sem versões compatíveis —</option>'}</select>
+      </label>
+      <button id="verInstall" class="ok"${versions.length ? '' : ' disabled'}>Instalar</button>
+    </div>
+    <div id="modMsg" class="muted small"></div>`;
+  const sel = $('#verSel');
+  const firstCompat = versions.find(v => v.compatible); if (firstCompat && sel) sel.value = firstCompat.id;
+  const vi = $('#verInstall');
+  if (vi) vi.onclick = async (ev) => { const ok = await installSlug(slug, sel.value, ev.currentTarget); if (ok) $('#modMsg').textContent = '✓ instalado'; };
+}
+
+// ---- instalados ----
 async function loadInstalled() {
   const { data } = await api('/api/content/installed');
   const box = $('#installedList'); box.innerHTML = '';
-  const files = (data && data.files) || [];
-  if (!files.length) { box.innerHTML = '<div class="muted small">nenhum arquivo instalado.</div>'; return; }
-  files.forEach(f => {
-    const el = document.createElement('div'); el.className = 'result';
-    el.innerHTML = `<div class="result-body">${f.name} <span class="muted small">· ${f.sizeMB} MB</span></div>`;
-    const b = document.createElement('button'); b.className = 'danger'; b.textContent = 'Remover';
-    b.onclick = async () => { if (!confirm('Remover ' + f.name + '?')) return; await api('/api/content/installed?file=' + encodeURIComponent(f.name), { method: 'DELETE' }); loadInstalled(); };
-    el.append(b); box.append(el);
+  const items = (data && data.items) || [];
+  if (!items.length) { box.innerHTML = '<div class="muted small">nenhum mod/plugin instalado ainda.</div>'; return; }
+  items.forEach(it => {
+    const upd = it.slug && updatesMap[it.slug];
+    const el = document.createElement('div'); el.className = 'inst-row' + (it.disabled ? ' off' : '');
+    el.innerHTML = `
+      ${iconHtml(it.icon, it.title)}
+      <div class="inst-meta">
+        <div class="inst-title">${esc(it.title)} ${it.version ? `<span class="muted small">${esc(verLabel(it.version))}</span>` : ''}${it.managed ? '' : ' <span class="tag warn">externo</span>'}${it.disabled ? ' <span class="tag">desativado</span>' : ''}</div>
+        <div class="muted small">${esc(it.file)} · ${it.sizeMB} MB</div>
+      </div>
+      <div class="inst-actions">
+        ${upd ? `<button class="ok sm btn-upd">Atualizar → ${esc(verLabel(upd.latest))}</button>` : ''}
+        <label class="tgl" title="Ativar / desativar"><input type="checkbox" class="tgl-in" ${it.disabled ? '' : 'checked'}><span class="tgl-track"></span></label>
+        <button class="danger sm btn-rm">Remover</button>
+      </div>`;
+    el.querySelector('.tgl-in').onchange = async (ev) => {
+      await api('/api/content/toggle', { method: 'POST', body: JSON.stringify({ file: it.filename, enabled: ev.target.checked }) });
+      toast('Alterado — reinicie o servidor pra aplicar.'); loadInstalled();
+    };
+    el.querySelector('.btn-rm').onclick = async () => {
+      if (!confirm('Remover ' + it.title + '?')) return;
+      const qs = it.slug ? ('slug=' + encodeURIComponent(it.slug)) : ('file=' + encodeURIComponent(it.file));
+      await api('/api/content/installed?' + qs, { method: 'DELETE' }); loadInstalled();
+    };
+    const ub = el.querySelector('.btn-upd');
+    if (ub) ub.onclick = async (ev) => { const ok = await installSlug(it.slug, upd.versionId, ev.currentTarget); if (ok) { delete updatesMap[it.slug]; loadInstalled(); } };
+    box.append(el);
   });
 }
+$('#searchForm').addEventListener('submit', (e) => { e.preventDefault(); doSearch(); });
+$('#sortSelect').addEventListener('change', doSearch);
 $('#reloadInstalled').addEventListener('click', loadInstalled);
+$('#modClose').addEventListener('click', () => $('#modOverlay').hidden = true);
+$('#modOverlay').addEventListener('click', (e) => { if (e.target === $('#modOverlay')) $('#modOverlay').hidden = true; });
+$('#updateCheck').addEventListener('click', async () => {
+  const b = $('#updateCheck'), old = b.textContent; b.disabled = true; b.textContent = 'verificando…'; $('#updMsg').textContent = '';
+  const { ok, data } = await api('/api/content/updates');
+  b.disabled = false; b.textContent = old;
+  if (!ok) { $('#updMsg').textContent = data.error || 'erro'; return; }
+  updatesMap = {}; (data.updates || []).forEach(u => updatesMap[u.slug] = u);
+  const n = (data.updates || []).length;
+  $('#updMsg').textContent = n ? `${n} atualização(ões) disponível(is) — botão "Atualizar" nos itens abaixo.` : 'Tudo atualizado. ✓';
+  loadInstalled();
+});
 
 // ---- compatibilidade ----
 $('#offlineToggle').addEventListener('change', async (e) => {
@@ -238,6 +433,64 @@ $('#bedrockBtn').addEventListener('click', async () => {
   const { ok, data } = await api('/api/compat/bedrock', { method: 'POST' });
   msg.textContent = ok ? `✓ instalado: ${data.installed.join(', ')} — reinicie o servidor.` : ('erro: ' + (data.error || ''));
   btn.disabled = false; loadInstalled();
+});
+
+// ---- bindings multi-servidor ----
+$('#serverSelect').addEventListener('change', (e) => switchServer(e.target.value));
+$('#serverManage').addEventListener('click', () => { $('#srvOverlay').hidden = false; renderServerManager(); });
+$('#srvClose').addEventListener('click', () => $('#srvOverlay').hidden = true);
+$('#srvOverlay').addEventListener('click', (e) => { if (e.target === $('#srvOverlay')) $('#srvOverlay').hidden = true; });
+$('#srvCreateForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('#srvName').value.trim(); if (!name) return;
+  const loader = $('#srvLoader').value, version = $('#srvVersion').value.trim();
+  const btn = $('#srvCreateBtn'); btn.disabled = true; btn.textContent = 'criando… (baixando o servidor)';
+  const r = await api('/api/servers/create', { method: 'POST', body: JSON.stringify({ name, loader, version }) });
+  btn.disabled = false; btn.textContent = 'Criar servidor';
+  if (!r.ok) { alert(r.data.error || 'falha ao criar'); return; }
+  $('#srvName').value = ''; $('#srvVersion').value = '';
+  toast('Servidor criado: ' + r.data.server.name + ' (porta ' + r.data.server.port + ')');
+  await loadServers(); renderServerManager();
+});
+
+// ---- bindings modpack ----
+document.querySelectorAll('.srv-tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.srv-tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  const mode = t.dataset.mode;
+  document.querySelectorAll('#srvOverlay [data-panel]').forEach(p => { p.hidden = p.dataset.panel !== mode; });
+}));
+function mpCard(r) {
+  const el = document.createElement('div'); el.className = 'store-card';
+  const tags = (r.categories || []).slice(0, 3).map(c => `<span class="tag">${esc(catLabel(c))}</span>`).join('');
+  el.innerHTML = `
+    <div class="store-top">${iconHtml(r.icon, r.title)}
+      <div class="store-meta"><div class="store-title">${esc(r.title)}</div><div class="muted small">${r.author ? 'por ' + esc(r.author) : ''}</div></div>
+    </div>
+    <div class="store-desc muted small">${esc((r.description || '').slice(0, 150))}</div>
+    <div class="store-tags">${tags}</div>
+    <div class="store-foot"><span class="muted small">⬇ ${fmtNum(r.downloads)}</span><span class="grow"></span>
+      <button class="ok sm btn-mp-create">Criar servidor</button></div>`;
+  el.querySelector('.btn-mp-create').onclick = async (ev) => {
+    if (!confirm(`Criar um servidor a partir de "${r.title}"?\n\nBaixa todos os mods do pack (de segundos a alguns minutos, dependendo do tamanho).`)) return;
+    const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'instalando…';
+    const name = $('#mpName').value.trim();
+    const { ok, data } = await api('/api/servers/create-modpack', { method: 'POST', body: JSON.stringify({ slug: r.slug, name }) });
+    btn.disabled = false; btn.textContent = 'Criar servidor';
+    if (!ok) { alert(data.error || 'falha ao criar'); return; }
+    toast('Modpack instalado: ' + data.server.name + ' — porta ' + data.server.port);
+    await loadServers(); renderServerManager();
+  };
+  return el;
+}
+$('#mpSearchForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = $('#mpSearch').value.trim(), loader = $('#mpLoader').value;
+  const box = $('#mpResults'); box.innerHTML = '<div class="muted small" style="padding:1rem">buscando…</div>';
+  const { ok, data } = await api(`/api/modpacks/search?q=${encodeURIComponent(q)}&loader=${encodeURIComponent(loader)}`);
+  if (!ok) { box.innerHTML = `<div class="err small" style="padding:1rem">${esc(data.error || 'erro')}</div>`; return; }
+  if (!data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; return; }
+  box.innerHTML = ''; data.results.forEach(r => box.append(mpCard(r)));
 });
 
 boot();

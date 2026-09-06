@@ -8,171 +8,316 @@
 </head>
 <body>
 
-<!-- Login -->
+<!-- ================= LOGIN ================= -->
 <div id="login" class="login" hidden>
-  <form id="loginForm" class="card login-card">
+  <form id="loginForm" class="login-card">
     <div class="brand">🧱 craftbox</div>
-    <p class="muted">Painel do servidor Minecraft</p>
+    <p class="muted small">Painel do servidor Minecraft</p>
     <input type="password" id="pw" placeholder="Senha" autocomplete="current-password" required>
-    <button type="submit">Entrar</button>
-    <div id="loginErr" class="err" hidden></div>
+    <button type="submit" class="ok">Entrar</button>
+    <div id="loginErr" class="err small" hidden></div>
   </form>
 </div>
 
-<!-- App -->
+<!-- ================= APP ================= -->
 <div id="app" hidden>
-  <header>
-    <div class="brand">🧱 craftbox</div>
-    <div class="status-pill" id="pill"><span class="dot" id="dot"></span><span id="pillText">—</span></div>
-    <nav>
-      <button class="tab active" data-tab="painel">Painel</button>
-      <button class="tab" data-tab="config">Configuração</button>
-      <button class="tab" data-tab="conteudo">Conteúdo</button>
-      <button class="tab" data-tab="compat">Compatibilidade</button>
-      <button class="tab" data-tab="console">Console</button>
-      <button class="tab" data-tab="logs">Logs</button>
-      <button class="tab" data-tab="backups">Backups</button>
+
+  <!-- ---- SIDEBAR ---- -->
+  <aside class="sidebar">
+    <div class="side-brand">
+      <span class="logo">🧱</span>
+      <span>
+        <div class="nm">craftbox</div>
+        <div class="sub">painel</div>
+      </span>
+    </div>
+
+    <nav class="side-nav">
+      <button class="tab active" data-tab="painel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span class="lbl">Painel</span>
+      </button>
+      <button class="tab" data-tab="config">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        <span class="lbl">Configuração</span>
+      </button>
+      <button class="tab" data-tab="conteudo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.89 1.45l8 4A2 2 0 0 1 22 7.24v9.53a2 2 0 0 1-1.11 1.79l-8 4a2 2 0 0 1-1.79 0l-8-4a2 2 0 0 1-1.1-1.8V7.24a2 2 0 0 1 1.11-1.79l8-4a2 2 0 0 1 1.78 0z"/><polyline points="2.32 6.16 12 11 21.68 6.16"/><line x1="12" y1="22.76" x2="12" y2="11"/></svg>
+        <span class="lbl">Conteúdo</span>
+      </button>
+      <button class="tab" data-tab="compat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
+        <span class="lbl">Compatibilidade</span>
+      </button>
+      <button class="tab" data-tab="console">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <span class="lbl">Console</span>
+      </button>
+      <button class="tab" data-tab="logs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <span class="lbl">Logs</span>
+      </button>
+      <button class="tab" data-tab="backups">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+        <span class="lbl">Backups</span>
+      </button>
     </nav>
-    <button id="logout" class="ghost" title="Sair">Sair</button>
-  </header>
 
-  <main>
-    <!-- PAINEL -->
-    <section id="painel" class="panel">
-      <div class="grid">
-        <div class="card">
-          <h3>Servidor</h3>
-          <div class="big" id="svcState">—</div>
-          <div class="muted" id="svcMeta">—</div>
-          <div class="row">
-            <button id="btnStart" class="ok">Ligar</button>
-            <button id="btnRestart" class="warn">Reiniciar</button>
-            <button id="btnStop" class="danger">Desligar</button>
-          </div>
-          <div id="powerMsg" class="muted small"></div>
-        </div>
-        <div class="card">
-          <h3>Jogadores</h3>
-          <div class="big" id="players">—</div>
-          <div class="muted">online / máximo</div>
-        </div>
-        <div class="card">
-          <h3>CPU</h3>
-          <div class="big"><span id="cpuFreq">—</span> <span class="unit">MHz</span></div>
-          <div class="muted" id="cpuMeta">—</div>
-          <div id="cpuWarn" class="err small" hidden></div>
-        </div>
-        <div class="card">
-          <h3>Memória</h3>
-          <div class="big"><span id="memUsed">—</span> <span class="unit">MB</span></div>
-          <div class="bar"><div id="memBar" class="bar-fill"></div></div>
-          <div class="muted" id="memMeta">—</div>
-        </div>
-        <div class="card">
-          <h3>Disco (mundo)</h3>
-          <div class="big"><span id="diskUsed">—</span> <span class="unit">GB</span></div>
-          <div class="bar"><div id="diskBar" class="bar-fill"></div></div>
-          <div class="muted" id="diskMeta">—</div>
-        </div>
-        <div class="card">
-          <h3>Temperatura</h3>
-          <div class="big"><span id="temp">—</span> <span class="unit">°C</span></div>
-          <div class="muted" id="loadMeta">—</div>
-        </div>
+    <div class="side-foot">
+      <div class="status-pill" id="pill"><span class="dot" id="dot"></span><span id="pillText">—</span></div>
+      <button id="logout" class="ghost logout-btn" title="Sair">Sair</button>
+    </div>
+  </aside>
+
+  <!-- ---- CONTENT ---- -->
+  <div class="content">
+    <div class="topbar">
+      <div id="pageTitle">Painel</div>
+      <div class="spacer"></div>
+      <div id="serverBar" class="server-bar" hidden>
+        <span class="muted small">Servidor</span>
+        <select id="serverSelect"></select>
+        <button id="serverManage" class="ghost sm" title="Gerenciar servidores">⚙ Gerenciar</button>
       </div>
-    </section>
+    </div>
 
-    <!-- CONFIG -->
-    <section id="config" class="panel" hidden>
-      <div class="card">
-        <div class="row spread">
-          <h3>server.properties</h3>
-          <div>
-            <button id="cfgReload" class="ghost">Recarregar</button>
-            <button id="cfgSave" class="ok">Salvar</button>
+    <main>
+      <!-- ============ PAINEL ============ -->
+      <section id="painel" class="panel">
+        <div class="hero">
+          <div class="hero-main">
+            <div class="hero-icon">🎮</div>
+            <div>
+              <div class="hero-state" id="svcState">—</div>
+              <div class="hero-sub" id="svcMeta">—</div>
+            </div>
+          </div>
+          <div class="hero-actions">
+            <button id="btnStart" class="ok">▶ Ligar</button>
+            <button id="btnRestart" class="warn">⟳ Reiniciar</button>
+            <button id="btnStop" class="danger">■ Desligar</button>
           </div>
         </div>
-        <p class="muted small">Após salvar, reinicie o servidor pra aplicar. Campos comuns aparecem primeiro.</p>
-        <div id="propsForm" class="props"></div>
-        <div id="cfgMsg" class="muted small"></div>
-      </div>
-    </section>
+        <div id="powerMsg" class="muted small" style="margin:-.4rem 0 1.1rem"></div>
 
-    <!-- CONTEUDO (mods/plugins) -->
-    <section id="conteudo" class="panel" hidden>
-      <div class="card">
-        <div class="row spread">
-          <h3>Mods / Plugins</h3>
-          <span class="muted small" id="contentInfo">—</span>
+        <div class="metrics">
+          <div class="metric">
+            <div class="metric-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              <span class="lbl">Jogadores</span>
+            </div>
+            <div class="big" id="players">—</div>
+            <div class="sub">online / máximo</div>
+          </div>
+
+          <div class="metric">
+            <div class="metric-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+              <span class="lbl">CPU</span>
+            </div>
+            <div class="big"><span id="cpuFreq">—</span> <span class="unit">MHz</span></div>
+            <div class="sub" id="cpuMeta">—</div>
+            <div id="cpuWarn" class="err small" style="margin-top:.35rem" hidden></div>
+          </div>
+
+          <div class="metric">
+            <div class="metric-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="2"/><line x1="6" y1="11" x2="6" y2="13"/><line x1="10" y1="11" x2="10" y2="13"/><line x1="14" y1="11" x2="14" y2="13"/><line x1="18" y1="11" x2="18" y2="13"/></svg>
+              <span class="lbl">Memória</span>
+            </div>
+            <div class="big"><span id="memUsed">—</span> <span class="unit">MB</span></div>
+            <div class="bar"><div id="memBar" class="bar-fill"></div></div>
+            <div class="sub" id="memMeta">—</div>
+          </div>
+
+          <div class="metric">
+            <div class="metric-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="4"/></svg>
+              <span class="lbl">Disco (mundo)</span>
+            </div>
+            <div class="big"><span id="diskUsed">—</span> <span class="unit">GB</span></div>
+            <div class="bar"><div id="diskBar" class="bar-fill"></div></div>
+            <div class="sub" id="diskMeta">—</div>
+          </div>
+
+          <div class="metric">
+            <div class="metric-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/></svg>
+              <span class="lbl">Temperatura</span>
+            </div>
+            <div class="big"><span id="temp">—</span> <span class="unit">°C</span></div>
+            <div class="sub" id="loadMeta">—</div>
+          </div>
         </div>
-        <p class="muted small">Busca no <b>Modrinth</b> e instala com 1 clique na pasta certa. Mods (Fabric) precisam ser instalados também no cliente dos jogadores; plugins (Paper) são só no servidor.</p>
-        <form id="searchForm" class="row">
-          <input type="text" id="searchIn" placeholder="buscar (ex: worldedit, lithium, luckperms, dynmap)">
-          <button type="submit">Buscar</button>
+      </section>
+
+      <!-- ============ CONFIG ============ -->
+      <section id="config" class="panel" hidden>
+        <div class="card">
+          <div class="row spread">
+            <h3>server.properties</h3>
+            <div class="row" style="margin:0">
+              <button id="cfgReload" class="ghost">Recarregar</button>
+              <button id="cfgSave" class="ok">Salvar</button>
+            </div>
+          </div>
+          <p class="muted small" style="margin-top:.6rem">Após salvar, reinicie o servidor pra aplicar. Campos comuns aparecem primeiro.</p>
+          <div id="propsForm" class="props"></div>
+          <div id="cfgMsg" class="muted small"></div>
+        </div>
+      </section>
+
+      <!-- ============ CONTEUDO ============ -->
+      <section id="conteudo" class="panel" hidden>
+        <div class="card">
+          <div class="row spread">
+            <h3>Loja de mods / plugins</h3>
+            <span class="muted small" id="contentInfo">—</span>
+          </div>
+          <p class="muted small" style="margin-top:.6rem">Busca no <b>Modrinth</b>, deixa você <b>escolher a versão</b> e instala junto com as <b>dependências</b>. Mods (Fabric) precisam ser instalados também no cliente dos jogadores; plugins (Paper) são só no servidor.</p>
+          <form id="searchForm" class="content-toolbar">
+            <input type="text" id="searchIn" placeholder="buscar (ex: worldedit, lithium, luckperms, dynmap)">
+            <select id="sortSelect" title="Ordenar">
+              <option value="relevance">Relevância</option>
+              <option value="downloads">Mais baixados</option>
+              <option value="follows">Mais seguidos</option>
+              <option value="newest">Novos</option>
+              <option value="updated">Atualizados recentemente</option>
+            </select>
+            <button type="submit" class="ok">Buscar</button>
+          </form>
+          <div id="catChips" class="chips"></div>
+          <div id="searchResults" class="store-grid"></div>
+        </div>
+        <div class="card">
+          <div class="row spread">
+            <h3>Instalados</h3>
+            <div class="row" style="margin:0">
+              <button id="updateCheck" class="ghost">Verificar atualizações</button>
+              <button id="reloadInstalled" class="ghost">Atualizar lista</button>
+            </div>
+          </div>
+          <div id="updMsg" class="muted small" style="margin-top:.5rem"></div>
+          <div id="installedList" style="margin-top:1rem"></div>
+        </div>
+      </section>
+
+      <!-- ============ COMPATIBILIDADE ============ -->
+      <section id="compat" class="panel" hidden>
+        <div class="card">
+          <h3>Minecraft "pirata" (modo offline)</h3>
+          <p class="muted small" style="margin-top:.6rem">Permite amigos <b>sem conta premium</b> entrarem. ⚠ Desliga a verificação de conta: qualquer um pode usar qualquer nick e o servidor fica mais exposto. Use só em rede privada / Tailscale.</p>
+          <label class="switch"><input type="checkbox" id="offlineToggle"><span>Ativar modo offline (<code>online-mode=false</code>)</span></label>
+          <div id="offlineMsg" class="muted small"></div>
+        </div>
+        <div class="card">
+          <h3>Compatibilidade Bedrock (celular / console)</h3>
+          <p class="muted small" style="margin-top:.6rem">Instala <b>Geyser + Floodgate</b> pra jogadores do Minecraft <b>Bedrock</b> (celular, console, Windows 10/11) entrarem no seu servidor Java. Depois de instalar, <b>reinicie o servidor</b>. A porta Bedrock é <code>19132/UDP</code> — precisa estar liberada.</p>
+          <button id="bedrockBtn" class="ok">Ativar Bedrock (Geyser + Floodgate)</button>
+          <div id="bedrockMsg" class="muted small" style="margin-top:.6rem"></div>
+        </div>
+      </section>
+
+      <!-- ============ CONSOLE ============ -->
+      <section id="console" class="panel" hidden>
+        <div class="card">
+          <h3>Console (RCON)</h3>
+          <p class="muted small" style="margin-top:.6rem">Envia comandos ao servidor em execução. Ex.: <code>list</code>, <code>say olá</code>, <code>op fulano</code>, <code>weather clear</code>.</p>
+          <pre id="rconOut" class="term"></pre>
+          <form id="rconForm" class="row">
+            <input type="text" id="rconIn" placeholder="digite um comando (sem a barra /)" autocomplete="off">
+            <button type="submit" class="ok">Enviar</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- ============ LOGS ============ -->
+      <section id="logs" class="panel" hidden>
+        <div class="card">
+          <div class="row spread">
+            <h3>Logs</h3>
+            <label class="muted small"><input type="checkbox" id="autolog" checked style="vertical-align:middle"> auto-atualizar</label>
+          </div>
+          <pre id="logOut" class="term tall"></pre>
+        </div>
+      </section>
+
+      <!-- ============ BACKUPS ============ -->
+      <section id="backups" class="panel" hidden>
+        <div class="card">
+          <div class="row spread">
+            <h3>Backups do mundo</h3>
+            <button id="bkNow" class="ok">Fazer backup agora</button>
+          </div>
+          <div id="bkMsg" class="muted small" style="margin-top:.6rem"></div>
+          <table class="tbl"><thead><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th></tr></thead>
+            <tbody id="bkBody"></tbody></table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- modal de detalhes / seleção de versão -->
+  <div id="modOverlay" class="modal" hidden>
+    <div class="modal-card">
+      <button id="modClose" class="modal-x" aria-label="Fechar">✕</button>
+      <div id="modBody"></div>
+    </div>
+  </div>
+
+  <!-- modal de gerenciamento de servidores -->
+  <div id="srvOverlay" class="modal" hidden>
+    <div class="modal-card">
+      <button id="srvClose" class="modal-x" aria-label="Fechar">✕</button>
+      <div class="mod-title" style="margin-bottom:.3rem">Servidores</div>
+      <p class="muted small">Crie, clone ou apague servidores. Com a RAM atual, o ideal é manter <b>um rodando por vez</b>.</p>
+      <div class="srv-tabs">
+        <button type="button" class="srv-tab active" data-mode="clean">Servidor limpo</button>
+        <button type="button" class="srv-tab" data-mode="modpack">A partir de modpack</button>
+      </div>
+
+      <form id="srvCreateForm" class="srv-create" data-panel="clean">
+        <input type="text" id="srvName" placeholder="Nome (ex: Survival dos amigos)" required>
+        <select id="srvLoader">
+          <option value="paper">Paper (plugins, leve)</option>
+          <option value="fabric">Fabric (mods)</option>
+        </select>
+        <input type="text" id="srvVersion" placeholder="Versão (opcional, ex: 1.21.1)">
+        <button type="submit" id="srvCreateBtn" class="ok">Criar servidor</button>
+      </form>
+
+      <div id="mpPanel" data-panel="modpack" hidden>
+        <input type="text" id="mpName" placeholder="Nome do servidor (opcional — usa o nome do pack)" style="width:100%;margin-bottom:.5rem">
+        <form id="mpSearchForm" class="content-toolbar">
+          <input type="text" id="mpSearch" placeholder="buscar modpack (ex: cobblemon, all the mods, better mc)">
+          <select id="mpLoader" title="Loader">
+            <option value="">Todos os loaders</option>
+            <option value="fabric">Fabric</option>
+            <option value="quilt">Quilt</option>
+            <option value="forge">Forge</option>
+            <option value="neoforge">NeoForge</option>
+          </select>
+          <button type="submit" class="ok">Buscar</button>
         </form>
-        <div id="searchResults" class="results"></div>
+        <p class="muted small" style="margin-top:.5rem">⚠ Cada jogador precisa instalar o <b>mesmo modpack</b> no cliente (Prism Launcher / Modrinth App). Depois de criar, o painel mostra o link do pack pra você compartilhar.</p>
+        <div id="mpResults" class="store-grid"></div>
       </div>
-      <div class="card">
-        <div class="row spread"><h3>Instalados</h3><button id="reloadInstalled" class="ghost">Atualizar</button></div>
-        <div id="installedList"></div>
-      </div>
-    </section>
 
-    <!-- COMPATIBILIDADE -->
-    <section id="compat" class="panel" hidden>
-      <div class="card">
-        <h3>Minecraft "pirata" (modo offline)</h3>
-        <p class="muted small">Permite amigos <b>sem conta premium</b> entrarem. ⚠ Desliga a verificação de conta: qualquer um pode usar qualquer nick e o servidor fica mais exposto. Use só em rede privada / Tailscale.</p>
-        <label class="switch"><input type="checkbox" id="offlineToggle"><span>Ativar modo offline (<code>online-mode=false</code>)</span></label>
-        <div id="offlineMsg" class="muted small"></div>
-      </div>
-      <div class="card">
-        <h3>Compatibilidade Bedrock (celular / console)</h3>
-        <p class="muted small">Instala <b>Geyser + Floodgate</b> pra jogadores do Minecraft <b>Bedrock</b> (celular, console, Windows 10/11) entrarem no seu servidor Java. Depois de instalar, <b>reinicie o servidor</b>. A porta Bedrock é <code>19132/UDP</code> — precisa estar liberada.</p>
-        <button id="bedrockBtn" class="ok">Ativar Bedrock (Geyser + Floodgate)</button>
-        <div id="bedrockMsg" class="muted small"></div>
-      </div>
-    </section>
-
-    <!-- CONSOLE -->
-    <section id="console" class="panel" hidden>
-      <div class="card">
-        <h3>Console (RCON)</h3>
-        <p class="muted small">Envia comandos ao servidor em execução. Ex.: <code>list</code>, <code>say olá</code>, <code>op fulano</code>, <code>weather clear</code>.</p>
-        <pre id="rconOut" class="term"></pre>
-        <form id="rconForm" class="row">
-          <input type="text" id="rconIn" placeholder="digite um comando (sem a barra /)" autocomplete="off">
-          <button type="submit">Enviar</button>
-        </form>
-      </div>
-    </section>
-
-    <!-- LOGS -->
-    <section id="logs" class="panel" hidden>
-      <div class="card">
-        <div class="row spread">
-          <h3>Logs</h3>
-          <label class="muted small"><input type="checkbox" id="autolog" checked> auto-atualizar</label>
-        </div>
-        <pre id="logOut" class="term tall"></pre>
-      </div>
-    </section>
-
-    <!-- BACKUPS -->
-    <section id="backups" class="panel" hidden>
-      <div class="card">
-        <div class="row spread">
-          <h3>Backups do mundo</h3>
-          <button id="bkNow" class="ok">Fazer backup agora</button>
-        </div>
-        <div id="bkMsg" class="muted small"></div>
-        <table class="tbl"><thead><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th></tr></thead>
-          <tbody id="bkBody"></tbody></table>
-      </div>
-    </section>
-  </main>
+      <h3 style="margin-top:1.2rem">Existentes</h3>
+      <div id="srvList" style="margin-top:.6rem"></div>
+    </div>
+  </div>
 </div>
 
 <script src="/app.js"></script>
+<script>
+// atualiza o título do topo conforme a aba (visual; não interfere no app.js)
+document.querySelectorAll('.side-nav .tab').forEach(function(t){
+  t.addEventListener('click', function(){
+    var lbl = t.querySelector('.lbl');
+    if (lbl) document.getElementById('pageTitle').textContent = lbl.textContent;
+  });
+});
+</script>
 </body>
 </html>

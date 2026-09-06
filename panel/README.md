@@ -6,20 +6,24 @@ o suficiente pra rodar ao lado do servidor num notebook antigo (~30–40 MB de R
 
 ## O que faz
 
-- **Painel** — status (no ar/parado), jogadores online (via RCON), e stats do sistema em tempo real: **frequência da CPU**, RAM, disco, temperatura e load.
-- **Ligar / Reiniciar / Desligar** o servidor (via systemd).
-- **Configuração** — editor visual do `server.properties` (MOTD, dificuldade, PvP, view-distance, etc.), salva no arquivo.
-- **Console** — envia comandos ao servidor em execução via **RCON**.
+- **Multi-servidor** — cria, clona e apaga vários servidores; cada instância é uma subpasta em `serversDir` com loader, versão e porta próprios, e um serviço systemd `minecraft@<id>`. Um **seletor** no topo troca o servidor ativo. Pensado pra rodar **um de cada vez** em hardware fraco.
+- **Painel** — status (no ar/desligado), jogadores online (via RCON), e stats do sistema em tempo real: **frequência da CPU**, RAM, disco, temperatura e load.
+- **Ligar / Reiniciar / Desligar** o servidor via systemd — no sistema (`sudo systemctl`) ou **rootless** (`systemctl --user`, sem sudo), conforme `systemctlUser`.
+- **Configuração** — editor visual do `server.properties` (MOTD, dificuldade, PvP, view-distance, etc.).
+- **Console** — envia comandos ao servidor via **RCON**.
 - **Logs** — últimas linhas do `latest.log`, com auto-atualização.
 - **Backups** — lista e dispara o backup do mundo.
-- **Conteúdo** — navegador de **mods/plugins do [Modrinth](https://modrinth.com)**: busca e instala/remove com 1 clique (detecta o loader — Fabric→`mods/`, Paper→`plugins/`). Estilo Prism, mas pro servidor.
-- **Compatibilidade** — **modo offline** ("pirata", `online-mode=false`) com 1 clique e **Bedrock** (celular/console) via **Geyser + Floodgate**, também em 1 clique.
+- **Conteúdo** — loja de **mods/plugins do [Modrinth](https://modrinth.com)** estilo Prism/Modrinth: busca com ícones/categorias/ordenação, **escolha de versão**, **instala as dependências obrigatórias junto**, e gerencia os instalados (ativar/desativar, atualizar, remover). Detecta o loader (Fabric→`mods/`, Paper→`plugins/`).
+- **Modpacks** — cria um servidor a partir de um modpack do Modrinth (`.mrpack`) em **Fabric/Quilt/Forge/NeoForge**: baixa os arquivos do lado servidor, aplica os `overrides`, instala o loader e mostra o **link do pack** pros jogadores instalarem o mesmo no cliente.
+- **Compatibilidade** — **modo offline** ("pirata", `online-mode=false`) e **Bedrock** (Geyser + Floodgate), cada um em 1 clique.
 - **Login por senha** (sessão em cookie assinado).
 
 ![Dashboard](../screenshots/painel-dashboard.jpg)
-![Configuração](../screenshots/painel-config.jpg)
 ![Conteúdo — mods/plugins](../screenshots/painel-conteudo.jpg)
-![Compatibilidade — offline + Bedrock](../screenshots/painel-compat.jpg)
+![Gerenciar servidores](../screenshots/painel-servidores.jpg)
+![Criar a partir de modpack](../screenshots/painel-modpack.jpg)
+
+> Precisa do comando `unzip` disponível pra instalar modpacks (extrair o `.mrpack`).
 
 > **Mods (Fabric) x plugins (Paper):** plugins rodam só no servidor (os amigos usam o Minecraft normal). Mods de conteúdo Fabric precisam ser instalados também no cliente de cada jogador — o painel instala o lado do servidor.
 
@@ -55,9 +59,13 @@ node server.js                        # sobe em http://localhost:8080
 | Campo | Descrição |
 |---|---|
 | `port` / `host` | Onde o painel escuta (padrão `8080` / `0.0.0.0`). |
-| `mcDir` | Pasta do servidor (padrão `/opt/minecraft`). |
-| `service` | Nome do serviço systemd (padrão `minecraft`). |
-| `rcon` | Host/porta/senha do RCON. Se a senha ficar vazia, é lida do `server.properties`. |
+| `mcDir` | Pasta do servidor no **modo 1 servidor** (padrão `/opt/minecraft`). |
+| `service` | Nome do serviço systemd no modo 1 servidor (padrão `minecraft`). |
+| `serversDir` | **Ativa o multi-servidor**: pasta que guarda as instâncias (cada subpasta = 1 servidor). Vazio = modo 1 servidor. |
+| `serviceTemplate` | Template do serviço systemd no multi (padrão `minecraft@`) — o serviço vira `minecraft@<id>`. |
+| `activeServer` | Instância selecionada no painel (o painel mantém sozinho). |
+| `systemctlUser` | `true` = controla via `systemctl --user` (**rootless**, sem sudo). `false` = `sudo systemctl` (padrão). |
+| `rcon` | Host/porta/senha do RCON. Vazio = lê do `server.properties` de cada instância. |
 | `auth` | `salt` + `hash` da senha (gere com `--hash`). |
 | `sessionSecret` | Segredo pra assinar a sessão (gerado sozinho se vazio). |
 

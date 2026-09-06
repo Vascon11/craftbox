@@ -11,28 +11,23 @@ Sem ambiente gráfico, sem peso: toda a RAM sobra pro jogo.
 
 ---
 
-## Interface
+## Interface — painel web `craftbox-panel`
 
-**Instalador** — abre sozinho no boot e cuida de tudo: escolha de Paper/Fabric, rede, EULA e dimensionamento automático de RAM.
-
-![Instalador do craftbox](screenshots/instalador.png)
-
-**Sistema instalado** — o appliance recebe você por SSH com um resumo dos comandos (MOTD):
-
-![MOTD do sistema](screenshots/sistema-motd.png)
-
-**Servidor no ar** — Paper rodando sob Java 26, com as portas 25565 (jogo) e 25575 (RCON) escutando:
-
-![Servidor rodando](screenshots/servidor-rodando.png)
-
-> Todas as telas acima são de uma instalação real do craftbox, validada numa máquina virtual UEFI (QEMU/KVM).
-
-### Painel web — `craftbox-panel`
-
-Um painel web opcional (**Node.js puro, zero dependências**) pra configurar e gerenciar o servidor pelo navegador: status + stats do sistema (CPU, RAM, disco, temperatura), ligar/reiniciar/desligar, editor visual do `server.properties`, console RCON, logs ao vivo, backups, **navegador de mods/plugins do Modrinth** (instala com 1 clique, estilo Prism) e **compatibilidade Bedrock (Geyser/Floodgate) + modo offline** — tudo com login por senha. Veja [`panel/`](panel/).
+O craftbox vem com um **painel web** (**Node.js puro, zero dependências**) pra gerenciar tudo pelo navegador, com cara de painel de hosting profissional e login por senha. Veja [`panel/`](panel/).
 
 ![Painel — dashboard](screenshots/painel-dashboard.jpg)
-![Painel — configuração](screenshots/painel-config.jpg)
+
+- 🖥️ **Multi-servidor** — crie/clone/apague vários servidores (Paper ou Fabric), cada um com loader, versão e porta próprios; troca entre eles por um seletor. Filosofia "um rodando por vez" pra hardware fraco.
+- 📊 **Painel** — status (no ar/desligado), jogadores online (RCON) e stats em tempo real: frequência de CPU, RAM, disco, temperatura e load.
+- ⏻ **Ligar / reiniciar / desligar** via systemd (ou `systemctl --user`, modo **rootless** sem sudo).
+- 🧩 **Loja de mods/plugins** estilo Prism/Modrinth — busca no [Modrinth](https://modrinth.com) com ícones, categorias e ordenação, **escolha de versão**, **dependências automáticas** e gestão dos instalados (ativar/desativar, atualizar, remover).
+- 📦 **Modpacks** — cria um servidor a partir de um modpack do Modrinth (`.mrpack`) em **Fabric/Quilt/Forge/NeoForge**: baixa mods + configs, monta a instância e mostra o link do pack pros jogadores instalarem o mesmo no cliente.
+- 🎮 **Compatibilidade** — **modo offline** ("pirata") e **Bedrock** (Geyser + Floodgate) em 1 clique.
+- ⚙️ **Configuração** — editor visual do `server.properties`; **Console** RCON; **Logs** ao vivo; **Backups** do mundo.
+
+![Painel — loja de mods](screenshots/painel-conteudo.jpg)
+![Painel — gerenciar servidores](screenshots/painel-servidores.jpg)
+![Painel — criar a partir de modpack](screenshots/painel-modpack.jpg)
 
 ---
 
