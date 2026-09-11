@@ -42,7 +42,8 @@ const DEFAULT_CONFIG = {
   serversDir: '',                                          // se definido, ativa MULTI-SERVIDOR (cada subpasta = 1 instancia)
   serviceTemplate: 'minecraft@',                           // unit systemd template; servico = serviceTemplate + <id>
   activeServer: '',                                        // instancia selecionada no painel (multi)
-  systemctlUser: false                                     // true = usa 'systemctl --user' (rootless, sem sudo)
+  systemctlUser: false,                                    // true = usa 'systemctl --user' (rootless, sem sudo)
+  integrationsDir: ''                                      // onde ficam os binarios das integracoes (playit/cloudflared); vazio = auto
 };
 
 function loadConfig() {
@@ -845,6 +846,114 @@ async function listServersDetailed() {
 }
 
 // ---------------------------------------------------------------------------
+// Integracoes (playit / tailscale / cloudflare) — expor o servidor / rede
+// Rodam como servicos de usuario do systemd (rootless).
+// ---------------------------------------------------------------------------
+function integrationsDir() {
+  const base = CONFIG.integrationsDir
+    || (CONFIG.serversDir ? path.join(path.dirname(CONFIG.serversDir), 'craftbox-integrations') : path.join(os.homedir(), '.craftbox-integrations'));
+  try { fs.mkdirSync(base, { recursive: true }); } catch {}
+  return base;
+}
+function userUnitDir() { const d = path.join(os.homedir(), '.config', 'systemd', 'user'); try { fs.mkdirSync(d, { recursive: true }); } catch {} return d; }
+function writeUserUnit(unit, desc, execStart) {
+  const content = `[Unit]\nDescription=${desc}\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${execStart}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`;
+  fs.writeFileSync(path.join(userUnitDir(), unit + '.service'), content);
+}
+async function uSvc(action, unit) { return run('systemctl', ['--user', action, unit]); }
+async function uActive(unit) { const r = await run('systemctl', ['--user', 'is-active', unit]); return (r.stdout || '').trim() || 'unknown'; }
+async function uJournal(unit, lines) { const r = await run('journalctl', ['--user', '-u', unit, '-n', String(lines || 120), '--no-pager', '-o', 'cat']); return r.stdout || ''; }
+const IARCH = os.arch() === 'arm64' ? 'aarch64' : 'amd64';
+const PLAYIT_URL = `https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-${IARCH}`;
+const CLOUDFLARED_URL = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${os.arch() === 'arm64' ? 'arm64' : 'amd64'}`;
+
+async function integrationsStatus() {
+  const dir = integrationsDir();
+  const playitBin = path.join(dir, 'playit');
+  const cfBin = path.join(dir, 'cloudflared');
+  // playit (daemon roda com um secret key criado no playit.gg)
+  const playit = { installed: fs.existsSync(playitBin), hasSecret: fs.existsSync(path.join(dir, 'playit.toml')), running: false, address: null };
+  if (playit.installed && await uActive('craftbox-playit') === 'active') {
+    playit.running = true;
+    const log = await uJournal('craftbox-playit', 150);
+    const ad = log.match(/[a-z0-9-]+\.(?:craft\.)?playit\.gg(?::\d+)?|\d+\.tcp\.playit\.gg(?::\d+)?/i);
+    if (ad) playit.address = ad[0];
+  }
+  // cloudflared
+  const cloudflare = { installed: fs.existsSync(cfBin), running: false, hasToken: fs.existsSync(path.join(dir, 'cloudflared.token')) };
+  if (cloudflare.installed && await uActive('craftbox-cloudflared') === 'active') cloudflare.running = true;
+  // tailscale (binario do sistema)
+  const tailscale = { installed: false, running: false, ip: null, state: '' };
+  const tv = await run('tailscale', ['version']);
+  tailscale.installed = tv.code === 0;
+  if (tailscale.installed) {
+    const st = await run('tailscale', ['status', '--json']);
+    if (st.code === 0) { try { const j = JSON.parse(st.stdout); tailscale.state = j.BackendState || ''; tailscale.running = j.BackendState === 'Running'; if (j.Self && j.Self.TailscaleIPs && j.Self.TailscaleIPs.length) tailscale.ip = j.Self.TailscaleIPs.find(x => x.includes('.')) || j.Self.TailscaleIPs[0]; } catch {} }
+  }
+  return { dir, systemctlUser: CONFIG.systemctlUser, playit, cloudflare, tailscale };
+}
+async function integrationInstall(name) {
+  const dir = integrationsDir();
+  if (name === 'playit') {
+    const bin = path.join(dir, 'playit');
+    await download(PLAYIT_URL, bin); try { fs.chmodSync(bin, 0o755); } catch {}
+    return { ok: true };
+  }
+  if (name === 'cloudflare') {
+    const bin = path.join(dir, 'cloudflared');
+    await download(CLOUDFLARED_URL, bin); try { fs.chmodSync(bin, 0o755); } catch {}
+    return { ok: true };
+  }
+  if (name === 'tailscale') {
+    const tv = await run('tailscale', ['version']);
+    if (tv.code === 0) return { ok: true, note: 'Tailscale já está instalado no sistema.' };
+    throw new Error('Tailscale precisa ser instalado no sistema (root): no Fedora, "sudo dnf install tailscale && sudo systemctl enable --now tailscaled".');
+  }
+  throw new Error('integração desconhecida');
+}
+async function integrationStart(name) {
+  const dir = integrationsDir();
+  if (name === 'playit') {
+    const bin = path.join(dir, 'playit');
+    const toml = path.join(dir, 'playit.toml');
+    if (!fs.existsSync(bin)) throw new Error('playit não instalado');
+    if (!fs.existsSync(toml)) throw new Error('cole o secret key do playit.gg primeiro');
+    writeUserUnit('craftbox-playit', 'craftbox — playit.gg agent', `${bin} --secret-path ${toml} --socket-path ${path.join(dir, 'playit.sock')}`);
+    await run('systemctl', ['--user', 'daemon-reload']);
+    const r = await uSvc('start', 'craftbox-playit');
+    if (r.code !== 0) throw new Error(r.stderr || 'falha ao iniciar playit');
+    return { ok: true };
+  }
+  if (name === 'cloudflare') {
+    const bin = path.join(dir, 'cloudflared');
+    const tokFile = path.join(dir, 'cloudflared.token');
+    if (!fs.existsSync(bin)) throw new Error('cloudflared não instalado');
+    if (!fs.existsSync(tokFile)) throw new Error('configure o token do túnel Cloudflare primeiro');
+    const token = fs.readFileSync(tokFile, 'utf8').trim();
+    writeUserUnit('craftbox-cloudflared', 'craftbox — Cloudflare Tunnel', `${bin} tunnel --no-autoupdate run --token ${token}`);
+    await run('systemctl', ['--user', 'daemon-reload']);
+    const r = await uSvc('start', 'craftbox-cloudflared');
+    if (r.code !== 0) throw new Error(r.stderr || 'falha ao iniciar cloudflared');
+    return { ok: true };
+  }
+  if (name === 'tailscale') {
+    const r = await run('tailscale', ['up', '--accept-routes'], { timeout: 20000 });
+    const url = (r.stdout + r.stderr).match(/https:\/\/login\.tailscale\.com\/\S+/);
+    if (url) return { ok: true, loginUrl: url[0] };
+    if (r.code === 0) return { ok: true };
+    throw new Error((r.stderr || r.stdout || 'falha').slice(-200) + ' (Tailscale normalmente precisa de root: "sudo tailscale up")');
+  }
+  throw new Error('integração desconhecida');
+}
+async function integrationStop(name) {
+  if (name === 'tailscale') { const r = await run('tailscale', ['down']); return { ok: r.code === 0 }; }
+  const unit = name === 'playit' ? 'craftbox-playit' : name === 'cloudflare' ? 'craftbox-cloudflared' : null;
+  if (!unit) throw new Error('integração desconhecida');
+  await uSvc('stop', unit);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
 function json(res, code, obj) {
@@ -1085,6 +1194,47 @@ const server = http.createServer((req, res) => {
         const id = url.searchParams.get('id') || '';
         try { return json(res, 200, await deleteInstance(id)); }
         catch (e) { return json(res, 500, { error: e.message }); }
+      }
+      // --- integracoes (playit / tailscale / cloudflare) ---
+      if (p === '/api/integrations' && req.method === 'GET') {
+        try { return json(res, 200, await integrationsStatus()); }
+        catch (e) { return json(res, 500, { error: e.message }); }
+      }
+      if (p === '/api/integrations/install' && req.method === 'POST') {
+        const { name } = await readBody(req);
+        try { return json(res, 200, await integrationInstall(name)); }
+        catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      if (p === '/api/integrations/start' && req.method === 'POST') {
+        const { name } = await readBody(req);
+        try { return json(res, 200, await integrationStart(name)); }
+        catch (e) { return json(res, 500, { error: e.message }); }
+      }
+      if (p === '/api/integrations/stop' && req.method === 'POST') {
+        const { name } = await readBody(req);
+        try { return json(res, 200, await integrationStop(name)); }
+        catch (e) { return json(res, 500, { error: e.message }); }
+      }
+      if (p === '/api/integrations/log' && req.method === 'GET') {
+        const name = url.searchParams.get('name') || '';
+        const unit = name === 'playit' ? 'craftbox-playit' : name === 'cloudflare' ? 'craftbox-cloudflared' : null;
+        if (!unit) return json(res, 400, { error: 'nome inválido' });
+        return json(res, 200, { log: await uJournal(unit, 120) });
+      }
+      if (p === '/api/integrations/cloudflare-token' && req.method === 'POST') {
+        const { token } = await readBody(req);
+        if (!token || !String(token).trim()) return json(res, 400, { error: 'token vazio' });
+        const f = path.join(integrationsDir(), 'cloudflared.token');
+        fs.writeFileSync(f, String(token).trim()); try { fs.chmodSync(f, 0o600); } catch {}
+        return json(res, 200, { ok: true });
+      }
+      if (p === '/api/integrations/playit-secret' && req.method === 'POST') {
+        const { secret } = await readBody(req);
+        const s = String(secret || '').trim();
+        if (!/^[0-9a-fA-F]{16,}$/.test(s)) return json(res, 400, { error: 'secret inválido (é uma sequência hexadecimal do playit.gg)' });
+        const f = path.join(integrationsDir(), 'playit.toml');
+        fs.writeFileSync(f, `secret_key = "${s}"\n`); try { fs.chmodSync(f, 0o600); } catch {}
+        return json(res, 200, { ok: true });
       }
 
       return json(res, 404, { error: 'endpoint desconhecido' });

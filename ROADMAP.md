@@ -3,10 +3,11 @@
 Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 
 ## Painel — novas funcionalidades
-- [ ] **Mesclar Logs + Console** numa aba só (log ao vivo + campo de comando RCON juntos, tipo um terminal de servidor de verdade).
-- [ ] **Página "Acesso / Rede"**:
-  - [ ] **Domínio via Cloudflare** — apontar um domínio pro servidor (Cloudflare Tunnel / DNS) com autenticação, sem abrir porta no roteador.
-  - [ ] **VPN (Tailscale)** — mostrar status, ligar/desligar e gerar o endereço de acesso pros amigos entrarem com segurança.
+- [x] **Mesclar Logs + Console** numa aba só (log ao vivo + campo de comando RCON juntos, tipo um terminal de servidor de verdade). ✅
+- [x] **Página "Integrações / Rede"** — cards com status ao vivo + instalar/ligar, rodando como serviços `systemctl --user` (rootless): ✅
+  - [x] **playit.gg** — servidor público sem abrir porta no roteador (túnel TCP); instala o binário + secret key do playit.gg.
+  - [x] **Cloudflare Tunnel** — instala o `cloudflared` + token do túnel (ótimo pro painel via domínio).
+  - [x] **Tailscale** — detecta, mostra IP/status e conecta/desconecta (VPN privada entre amigos).
 - [ ] **Gerenciar acesso / usuários**:
   - [ ] Trocar a senha do painel pela própria interface (hoje só via `node server.js --hash`).
   - [ ] Contas de usuário (email + senha) pra controlar quem acessa o painel.

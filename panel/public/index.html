@@ -49,13 +49,13 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
         <span class="lbl">Compatibilidade</span>
       </button>
+      <button class="tab" data-tab="integra">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span class="lbl">Integrações</span>
+      </button>
       <button class="tab" data-tab="console">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         <span class="lbl">Console</span>
-      </button>
-      <button class="tab" data-tab="logs">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-        <span class="lbl">Logs</span>
       </button>
       <button class="tab" data-tab="backups">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
@@ -218,27 +218,31 @@
         </div>
       </section>
 
-      <!-- ============ CONSOLE ============ -->
-      <section id="console" class="panel" hidden>
+      <!-- ============ INTEGRAÇÕES / REDE ============ -->
+      <section id="integra" class="panel" hidden>
         <div class="card">
-          <h3>Console (RCON)</h3>
-          <p class="muted small" style="margin-top:.6rem">Envia comandos ao servidor em execução. Ex.: <code>list</code>, <code>say olá</code>, <code>op fulano</code>, <code>weather clear</code>.</p>
-          <pre id="rconOut" class="term"></pre>
-          <form id="rconForm" class="row">
-            <input type="text" id="rconIn" placeholder="digite um comando (sem a barra /)" autocomplete="off">
-            <button type="submit" class="ok">Enviar</button>
-          </form>
+          <div class="row spread">
+            <h3>Integrações / Rede</h3>
+            <button id="intgReload" class="ghost">Atualizar</button>
+          </div>
+          <p class="muted small" style="margin-top:.6rem">Deixe o servidor acessível pra fora <b>sem mexer no roteador</b>, ou por VPN privada. Cada serviço roda ao lado do painel.</p>
+          <div id="intgList" class="intg-list"></div>
         </div>
       </section>
 
-      <!-- ============ LOGS ============ -->
-      <section id="logs" class="panel" hidden>
+      <!-- ============ CONSOLE (log ao vivo + comandos) ============ -->
+      <section id="console" class="panel" hidden>
         <div class="card">
           <div class="row spread">
-            <h3>Logs</h3>
-            <label class="muted small"><input type="checkbox" id="autolog" checked style="vertical-align:middle"> auto-atualizar</label>
+            <h3>Console</h3>
+            <label class="muted small"><input type="checkbox" id="autolog" checked style="vertical-align:middle"> log ao vivo</label>
           </div>
-          <pre id="logOut" class="term tall"></pre>
+          <p class="muted small" style="margin-top:.6rem">Log do servidor em tempo real. Digite embaixo pra mandar comandos via <b>RCON</b> (sem a barra <code>/</code>). Ex.: <code>list</code>, <code>say olá</code>, <code>op fulano</code>, <code>weather clear</code>.</p>
+          <pre id="consoleOut" class="term tall"></pre>
+          <form id="rconForm" class="row">
+            <input type="text" id="rconIn" placeholder="comando (ex: list, say olá, time set day)" autocomplete="off">
+            <button type="submit" class="ok">Enviar</button>
+          </form>
         </div>
       </section>
 

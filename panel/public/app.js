@@ -28,7 +28,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
 async function showApp() { $('#app').hidden = false; await loadServers(); reloadAll(); }
-function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); }
+function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); }
 
 // ---- multi-servidor ----
 async function loadServers() {
@@ -206,24 +206,34 @@ $('#cfgSave').addEventListener('click', async () => {
   setTimeout(() => $('#cfgMsg').textContent = '', 4000);
 });
 
-// ---- console (rcon) ----
+// ---- console (log ao vivo + comandos RCON, mesma tela) ----
+let logBuf = '';   // log do servidor (atualiza sozinho)
+let cmdBuf = '';   // comandos digitados + respostas (persistem entre refreshes)
+function renderConsole() {
+  const el = $('#consoleOut'); if (!el) return;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const parts = [];
+  if (logBuf) parts.push(logBuf);
+  if (cmdBuf) parts.push('──── comandos ────\n' + cmdBuf);
+  el.textContent = parts.join('\n') || '(sem logs)';
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
 $('#rconForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const cmd = $('#rconIn').value.trim(); if (!cmd) return;
-  const out = $('#rconOut');
-  out.textContent += `> ${cmd}\n`;
   $('#rconIn').value = '';
+  cmdBuf += `> ${cmd}\n`; renderConsole();
   const { ok, data } = await api('/api/rcon', { method: 'POST', body: JSON.stringify({ command: cmd }) });
-  out.textContent += (ok ? (data.response || '(ok)') : ('erro: ' + (data.error || ''))) + '\n';
-  out.scrollTop = out.scrollHeight;
+  const resp = ok ? (data.response || '(ok)') : ('erro: ' + (data.error || ''));
+  cmdBuf += resp.trim() + '\n'; renderConsole();
+  const el = $('#consoleOut'); if (el) el.scrollTop = el.scrollHeight;
 });
 
-// ---- logs ----
 let logTimer;
 async function refreshLogs() {
   if (!$('#autolog').checked) return;
   const { ok, data } = await api('/api/logs?lines=250');
-  if (ok) { const el = $('#logOut'); const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; el.textContent = data.log || '(sem logs)'; if (atBottom) el.scrollTop = el.scrollHeight; }
+  if (ok) { logBuf = data.log || ''; renderConsole(); }
 }
 function startLogs() { refreshLogs(); clearInterval(logTimer); logTimer = setInterval(refreshLogs, 3000); }
 
@@ -492,5 +502,81 @@ $('#mpSearchForm').addEventListener('submit', async (e) => {
   if (!data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; return; }
   box.innerHTML = ''; data.results.forEach(r => box.append(mpCard(r)));
 });
+
+// ---- integrações / rede (playit / tailscale / cloudflare) ----
+function intgPill(on) { return `<span class="status-pill"><span class="dot ${on ? 'on' : 'idle'}"></span>${on ? 'ativo' : 'parado'}</span>`; }
+async function intgAction(name, action) { return api('/api/integrations/' + action, { method: 'POST', body: JSON.stringify({ name }) }); }
+async function loadIntegrations() { const { ok, data } = await api('/api/integrations'); if (ok) renderIntegrations(data); }
+function renderIntegrations(d) {
+  const box = $('#intgList'); if (!box) return; box.innerHTML = '';
+
+  // ---- playit ----
+  {
+    const p = d.playit, el = document.createElement('div'); el.className = 'intg';
+    let body = '';
+    if (!p.installed) body = `<button class="ok sm act" data-a="install">Instalar</button>`;
+    else if (!p.hasSecret) {
+      body = `<div class="intg-note">Crie um agente em <a href="https://playit.gg" target="_blank" rel="noopener">playit.gg</a> (Account → Agents → <b>self-managed</b>), copie o <b>secret key</b> e cole aqui:</div>
+        <div class="row" style="margin-top:.5rem"><input type="password" class="pl-secret" placeholder="secret key do playit.gg" style="flex:1"><button class="ghost sm act" data-a="secret">Salvar</button></div>`;
+    } else if (!p.running) body = `<button class="ok sm act" data-a="start">Ligar túnel</button>`;
+    else {
+      if (p.address) body += `<div class="intg-note ok">Endereço público: <code>${esc(p.address)}</code> — é esse que os amigos usam no Minecraft.</div>`;
+      else body += `<div class="muted small">túnel no ar. Configure a porta no painel do playit.gg; o endereço aparece aqui (clique em Atualizar).</div>`;
+      body += `<div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desligar</button></div>`;
+    }
+    el.innerHTML = `<div class="intg-head"><div class="intg-ic">🌍</div><div class="intg-meta"><div class="intg-title">playit.gg</div><div class="muted small">Servidor público sem abrir porta no roteador (túnel TCP). Ideal pra Minecraft.</div></div>${intgPill(p.running)}</div><div class="intg-body">${body}</div>`;
+    el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
+      const a = ev.currentTarget.dataset.a;
+      if (a === 'secret') { const s = el.querySelector('.pl-secret').value.trim(); if (!s) return; const r = await api('/api/integrations/playit-secret', { method: 'POST', body: JSON.stringify({ secret: s }) }); toast(r.ok ? 'Secret salvo — agora ligue o túnel.' : (r.data.error || 'erro')); return loadIntegrations(); }
+      ev.currentTarget.disabled = true;
+      const r = await intgAction('playit', a);
+      if (!r.ok) alert(r.data.error || 'erro');
+      setTimeout(loadIntegrations, a === 'stop' ? 500 : 2000);
+    });
+    box.append(el);
+  }
+
+  // ---- tailscale ----
+  {
+    const t = d.tailscale, el = document.createElement('div'); el.className = 'intg';
+    let body = '';
+    if (!t.installed) body = `<div class="intg-note">Precisa instalar no sistema (root): <code>sudo dnf install tailscale && sudo systemctl enable --now tailscaled</code></div>`;
+    else if (!t.running) body = `<button class="ok sm act" data-a="start">Conectar (login)</button><div class="muted small" style="margin-top:.4rem">Se pedir permissão, rode uma vez <code>sudo tailscale up</code>.</div>`;
+    else body = `<div class="intg-note ok">Conectado. IP Tailscale: <code>${esc(t.ip || '?')}</code> — amigos na sua rede Tailscale entram por <code>${esc(t.ip || 'IP')}:PORTA</code>.</div><div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desconectar</button></div>`;
+    el.innerHTML = `<div class="intg-head"><div class="intg-ic">🔒</div><div class="intg-meta"><div class="intg-title">Tailscale</div><div class="muted small">VPN privada: só quem você convidar acessa. Ótimo pra jogar entre amigos.</div></div>${intgPill(t.running)}</div><div class="intg-body">${body}</div>`;
+    el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
+      const a = ev.currentTarget.dataset.a; ev.currentTarget.disabled = true;
+      const r = await intgAction('tailscale', a);
+      if (a === 'start' && r.ok && r.data.loginUrl) { window.open(r.data.loginUrl, '_blank'); toast('Abra o link pra fazer login no Tailscale.'); }
+      else if (!r.ok) alert(r.data.error || 'erro');
+      setTimeout(loadIntegrations, 900);
+    });
+    box.append(el);
+  }
+
+  // ---- cloudflare ----
+  {
+    const c = d.cloudflare, el = document.createElement('div'); el.className = 'intg';
+    let body = '';
+    if (!c.installed) body = `<button class="ok sm act" data-a="install">Instalar cloudflared</button>`;
+    else {
+      body += `<div class="intg-note">Domínio/túnel via Cloudflare. Ótimo pro <b>painel web</b> (HTTP). Pra porta do MC (TCP) o plano grátis é limitado (precisa Spectrum pago).</div>`;
+      body += `<div class="row" style="margin-top:.5rem"><input type="password" class="cf-token" placeholder="token do túnel (Zero Trust → Tunnels)" style="flex:1"><button class="ghost sm act" data-a="token">Salvar token</button></div>`;
+      if (!c.running) body += `<div class="row" style="margin-top:.5rem"><button class="ok sm act" data-a="start"${c.hasToken ? '' : ' disabled title="salve o token primeiro"'}>Ligar túnel</button></div>`;
+      else body += `<div class="intg-note ok" style="margin-top:.5rem">Túnel ligado.</div><div class="row" style="margin-top:.5rem"><button class="danger sm act" data-a="stop">Desligar</button></div>`;
+    }
+    el.innerHTML = `<div class="intg-head"><div class="intg-ic">☁️</div><div class="intg-meta"><div class="intg-title">Cloudflare Tunnel</div><div class="muted small">Expõe o painel/serviço por um domínio, com túnel seguro.</div></div>${intgPill(c.running)}</div><div class="intg-body">${body}</div>`;
+    el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
+      const a = ev.currentTarget.dataset.a;
+      if (a === 'token') { const tok = el.querySelector('.cf-token').value.trim(); if (!tok) return; const r = await api('/api/integrations/cloudflare-token', { method: 'POST', body: JSON.stringify({ token: tok }) }); toast(r.ok ? 'Token salvo.' : (r.data.error || 'erro')); return loadIntegrations(); }
+      ev.currentTarget.disabled = true;
+      const r = await intgAction('cloudflare', a);
+      if (!r.ok) alert(r.data.error || 'erro');
+      setTimeout(loadIntegrations, a === 'stop' ? 500 : 1500);
+    });
+    box.append(el);
+  }
+}
+$('#intgReload').addEventListener('click', loadIntegrations);
 
 boot();

@@ -280,3 +280,16 @@ button.sm{padding:.4rem .7rem;font-size:.82rem;border-radius:8px}
 .srv-tab:hover{color:var(--txt)}
 .srv-tab.active{color:var(--accent);background:var(--accent-dim);border-color:var(--accent)}
 #mpResults{max-height:46vh;overflow:auto;margin-top:.8rem}
+
+/* ---------- INTEGRAÇÕES / REDE ---------- */
+.intg-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:1rem;margin-top:1rem}
+.intg{background:var(--card2);border:1px solid var(--line);border-radius:var(--radius);padding:1rem}
+.intg-head{display:flex;align-items:center;gap:.8rem}
+.intg-ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:var(--card);border:1px solid var(--line);font-size:1.4rem;flex:none}
+.intg-meta{flex:1;min-width:0}
+.intg-title{font-weight:700}
+.intg-head .status-pill{flex:none}
+.intg-body{margin-top:.85rem}
+.intg-note{font-size:.85rem;line-height:1.5;padding:.55rem .7rem;border-radius:8px;background:var(--card);border:1px solid var(--line);margin-bottom:.3rem;word-break:break-word}
+.intg-note.ok{border-color:var(--accent2)}
+.intg-note.warn{border-color:var(--warn)}
