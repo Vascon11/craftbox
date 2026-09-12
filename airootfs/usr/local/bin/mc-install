@@ -103,6 +103,10 @@ MC_MOTD=$(ask "Mensagem do servidor (MOTD)" "Servidor do vascon1 e amigos")
 MC_MAXP=$(ask "Maximo de jogadores" "8")
 MC_DIFF=$(ask "Dificuldade (peaceful/easy/normal/hard)" "normal")
 echo
+echo "  Otimizacoes: instala mods de performance (Fabric) e ajusta view/simulation"
+echo "  distance pra CPU fraca. Se preferir, deixo vanilla e voce ajusta pelo painel."
+if yesno "Instalar otimizacoes pra hardware fraco?" s; then OPTIMIZE="true"; else OPTIMIZE="false"; fi
+echo
 say "Painel web (craftbox-panel)"
 while :; do
   PANELPW=$(askpw "Defina a senha do painel web")
@@ -128,6 +132,7 @@ echo "  Disco:      $DISK  (SERA APAGADO)"
 echo "  Hostname:   $HOSTNAME"
 echo "  Usuario:    $USERNAME"
 echo "  Servidor:   $MCTYPE  versao=$MCVER  heap=${HEAP}MB"
+echo "  Otimizado:  $OPTIMIZE"
 echo "  EULA:       $EULA"
 echo
 yesno "Tudo certo? Iniciar instalacao?" n || die "Abortado."
@@ -203,16 +208,20 @@ else
   curl -fL --retry 3 -o "$MCDIR/server.jar" \
     "https://meta.fabricmc.net/v2/versions/loader/$MCVER/$LOADER/$INST/server/jar" \
     && ok "Fabric server $MCVER (loader $LOADER)" || warn "Falha ao baixar Fabric."
-  say "Baixando mods de performance (best-effort)"
-  for slug in fabric-api lithium ferrite-core krypton c2me-fabric; do
-    url=$(curl -fsSL "https://api.modrinth.com/v2/project/$slug/version?loaders=%5B%22fabric%22%5D&game_versions=%5B%22$MCVER%22%5D" \
-          | jq -r '.[0].files[]? | select(.primary==true) | .url' 2>/dev/null | head -1)
-    if [ -n "${url:-}" ] && [ "$url" != "null" ]; then
-      curl -fL --retry 2 -o "$MCDIR/mods/$slug.jar" "$url" && ok "mod: $slug" || warn "pulei $slug"
-    else
-      warn "sem build de '$slug' pra $MCVER, pulei"
-    fi
-  done
+  if [ "$OPTIMIZE" = "true" ]; then
+    say "Baixando mods de performance (best-effort)"
+    for slug in fabric-api lithium ferrite-core krypton c2me-fabric; do
+      url=$(curl -fsSL "https://api.modrinth.com/v2/project/$slug/version?loaders=%5B%22fabric%22%5D&game_versions=%5B%22$MCVER%22%5D" \
+            | jq -r '.[0].files[]? | select(.primary==true) | .url' 2>/dev/null | head -1)
+      if [ -n "${url:-}" ] && [ "$url" != "null" ]; then
+        curl -fL --retry 2 -o "$MCDIR/mods/$slug.jar" "$url" && ok "mod: $slug" || warn "pulei $slug"
+      else
+        warn "sem build de '$slug' pra $MCVER, pulei"
+      fi
+    done
+  else
+    warn "modo limpo: Fabric sem mods de performance (instale pelo painel quando quiser)"
+  fi
 fi
 
 # metadados da instancia (lidos pelo painel)
@@ -226,14 +235,16 @@ cat > "$MCDIR/eula.txt" <<EOF
 eula=$EULA
 EOF
 
+# distancias: modo otimizado usa valores menores (CPU fraca); modo limpo usa vanilla
+if [ "$OPTIMIZE" = "true" ]; then VDIST=6; SDIST=4; else VDIST=10; SDIST=10; fi
 cat > "$MCDIR/server.properties" <<EOF
-# Ajustado para CPU fraca (i5-4210U). Edite depois se quiser.
+# view/simulation distance conforme o modo escolhido na instalacao. Edite pelo painel.
 motd=$MC_MOTD
 max-players=$MC_MAXP
 difficulty=$MC_DIFF
 online-mode=true
-view-distance=6
-simulation-distance=4
+view-distance=$VDIST
+simulation-distance=$SDIST
 network-compression-threshold=256
 enable-command-block=true
 spawn-protection=0

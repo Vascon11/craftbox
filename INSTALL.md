@@ -81,6 +81,7 @@ Valores entre `[colchetes]` são o padrão — é só apertar **Enter** pra acei
    - **Versão** — Enter deixa a **última estável**.
    - **Nome do primeiro servidor** — padrão `Principal` (dá pra criar mais depois pelo painel).
    - **MOTD** (mensagem do servidor), **máximo de jogadores**, **dificuldade**.
+   - **Otimizações pra hardware fraco?** — `s` instala mods de performance (no Fabric) e já reduz `view/simulation-distance`; `n` deixa **vanilla/limpo** pra você ajustar depois pelo painel.
 6. **Painel web** — você **define a senha do painel** (digita duas vezes). É a senha
    que você vai usar em `http://<ip>:8080`.
 7. **EULA da Mojang** — aceite (`s`) pra o servidor poder iniciar.
