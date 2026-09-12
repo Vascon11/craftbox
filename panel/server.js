@@ -186,7 +186,9 @@ function sessionUser(req) { const v = verify(parseCookies(req).cbsession); if (!
 // ---------------------------------------------------------------------------
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 15000, ...opts }, (err, stdout, stderr) => {
+    // maxBuffer alto: instaladores (Forge/NeoForge/Quilt) cospem MUITA saída
+    // (o do Forge 1.20.1 passa de 1 MB) e o padrão do execFile mataria o processo.
+    execFile(cmd, args, { timeout: 15000, maxBuffer: 256 * 1024 * 1024, ...opts }, (err, stdout, stderr) => {
       resolve({ code: err ? (err.code || 1) : 0, stdout: (stdout || '').toString(), stderr: (stderr || '').toString() });
     });
   });
@@ -339,6 +341,64 @@ async function systemStats() {
   };
 }
 
+// Soma o tamanho (bytes) das pastas de mundo da instância ativa.
+function dirSizeBytes(dir) {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop();
+    let ents;
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of ents) {
+      const fp = path.join(d, e.name);
+      try {
+        if (e.isDirectory()) stack.push(fp);
+        else if (e.isFile()) total += fs.statSync(fp).size;
+      } catch {}
+    }
+  }
+  return total;
+}
+function worldDirs() {
+  const base = SRV().dir;
+  let level = 'world';
+  try { const props = readProps(); if (props && props['level-name']) level = props['level-name']; } catch {}
+  const names = [level, level + '_nether', level + '_the_end', 'world', 'world_nether', 'world_the_end'];
+  const out = [];
+  for (const name of names) {
+    const d = path.join(base, name);
+    if (out.includes(d)) continue;
+    try { if (fs.statSync(d).isDirectory()) out.push(d); } catch {}
+  }
+  return out;
+}
+function worldSize() {
+  const dirs = worldDirs();
+  let bytes = 0;
+  for (const d of dirs) bytes += dirSizeBytes(d);
+  return { bytes, dirs: dirs.map(d => path.basename(d)) };
+}
+
+// Teste de velocidade de download (Cloudflare). Sob demanda — é um download real.
+function speedTest(bytes = 25000000) {
+  return new Promise((resolve, reject) => {
+    const url = `https://speed.cloudflare.com/__down?bytes=${bytes}`;
+    const start = Date.now();
+    let received = 0;
+    const req = https.get(url, { headers: { 'User-Agent': UA } }, (r) => {
+      if (r.statusCode !== 200) { r.resume(); return reject(new Error('HTTP ' + r.statusCode)); }
+      r.on('data', c => received += c.length);
+      r.on('end', () => {
+        const secs = (Date.now() - start) / 1000;
+        const mbps = secs > 0 ? (received * 8) / secs / 1e6 : 0;
+        resolve({ mbps: +mbps.toFixed(1), bytes: received, secs: +secs.toFixed(2) });
+      });
+    });
+    req.setTimeout(30000, () => req.destroy(new Error('tempo esgotado')));
+    req.on('error', reject);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Conteudo: loader, versao, Modrinth, GeyserMC, downloads
 // ---------------------------------------------------------------------------
@@ -394,6 +454,15 @@ function download(url, dest) {
     };
     go(url);
   });
+}
+// executa `worker` sobre `items` com no máx `concurrency` em paralelo (pool);
+// rejeita no primeiro erro (o try/catch de quem chamou limpa a instância).
+async function runPool(items, concurrency, worker) {
+  let i = 0;
+  const runners = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
+    while (i < items.length) { const idx = i++; await worker(items[idx]); }
+  });
+  await Promise.all(runners);
 }
 // loaders aceitos ao listar versoes de um projeto (mais amplo que a busca)
 function versionLoaders(loader) {
@@ -774,6 +843,66 @@ async function unzipTo(zip, dest) {
   const r = await run('unzip', ['-o', '-q', zip, '-d', dest], { timeout: 180000 });
   if (r.code !== 0) throw new Error('unzip falhou: ' + (r.stderr || r.stdout).slice(-200));
 }
+// Mods client-only conhecidos (renderização/UI/shaders): num servidor dedicado
+// eles tentam carregar classes de cliente e derrubam o boot ("invalid dist
+// DEDICATED_SERVER"). Muitos modpacks são feitos pra singleplayer e trazem esses.
+const CLIENT_MOD_TOKENS = [
+  // shaders / renderização
+  'oculus', 'irisshaders', 'iris-', 'optifine', 'embeddium', 'rubidium', 'sodium',
+  'indium', 'entity_texture_features', 'entitytexturefeatures', 'etf-',
+  'entity_model_features', 'entitymodelfeatures', 'emf-', 'citresewn', 'continuity',
+  'animatica', 'fusion-', 'connectedness', 'chloride',
+  // mapas / HUD / UI
+  'xaero', 'inventoryhud', 'inventoryprofilesnext', 'libipn', 'armorchroma',
+  'hide-key-binding', 'hidekeybinding', 'legendarytooltips', 'controlling',
+  'betterf3', 'chat_heads', 'chatheads', 'chatanimation', 'chattools',
+  'movesubtitles', 'advancementinfo', 'better-selection', 'i18nupdate',
+  'jecharacters', 'justenoughcharacters', 'itemzoom', 'justzoom', 'imblocker',
+  'clienttweaks', 'durabilitytooltip', 'enhancedvisuals', 'fastscrolling',
+  'fogoverrides', 'forgeconfigscreens', 'lcchatlogfilter', 'sound-physics',
+  'soundphysics',
+  // skins / animação / câmera
+  '3dskinlayers', 'skinlayers', 'customskinloader', 'betterthirdperson',
+  'notenoughanimations', 'firstperson', 'capes', 'eatinganimation',
+  // luzes / partículas / som (client)
+  'dynamiclights', 'lambdynamiclights', 'ryoamiclights', 'particlerain',
+  'presencefootsteps', 'soundphysics', 'ambientsounds', 'extrasounds', 'visuality',
+  // zoom / mouse / carregamento / diversos client
+  'zoomify', 'okzoomer', 'ok-zoomer', 'ok_zoomer', 'zume', 'mousetweaks',
+  'drippyloadingscreen', 'fancymenu', 'konkrete', 'entityculling', 'cullleaves',
+  'cull-less-leaves', 'moreculling', 'reeses', 'immediatelyfast', 'badoptimizations',
+  'chunksfadein', 'smoothscroll', 'fast-ip-ping', 'emiffect', 'emienchants',
+];
+async function jarEnvClient(jar) {
+  for (const meta of ['fabric.mod.json', 'quilt.mod.json']) {
+    const r = await run('unzip', ['-p', jar, meta], { timeout: 15000 });
+    if (r.code !== 0 || !r.stdout) continue;
+    try {
+      const j = JSON.parse(r.stdout);
+      const env = j.environment || (j.quilt_loader && j.quilt_loader.minecraft && j.quilt_loader.minecraft.environment);
+      if (env && String(env).toLowerCase() === 'client') return true;
+    } catch {}
+  }
+  return false;
+}
+// Desativa (renomeia pra .disabled, sem apagar) os mods client-only de um servidor.
+async function stripClientMods(dir, loader) {
+  const modsDir = path.join(dir, 'mods');
+  let entries; try { entries = fs.readdirSync(modsDir); } catch { return []; }
+  const disabled = [];
+  for (const name of entries) {
+    if (!name.toLowerCase().endsWith('.jar')) continue;
+    const low = name.toLowerCase();
+    let clientOnly = CLIENT_MOD_TOKENS.some(t => low.includes(t));
+    // fabric.mod.json com environment:client é sinal confiável (inclusive mods
+    // Fabric rodando no Forge via Sinytra Connector)
+    if (!clientOnly) clientOnly = await jarEnvClient(path.join(modsDir, name));
+    if (clientOnly) {
+      try { fs.renameSync(path.join(modsDir, name), path.join(modsDir, name + '.disabled')); disabled.push(name); } catch {}
+    }
+  }
+  return disabled;
+}
 async function modpackSearch(query, loaderFilter, offsetArg) {
   const facets = ['["project_type:modpack"]'];
   if (loaderFilter) facets.push(`["categories:${loaderFilter}"]`);
@@ -801,10 +930,17 @@ function pickModpackVersion(versions, versionId) {
 async function installFabricServer(dir, mc, loaderVer) {
   const insts = await httpsJson('https://meta.fabricmc.net/v2/versions/installer');
   const inst = (insts.find(i => i.stable) || insts[0]).version;
-  let lv = loaderVer;
-  if (!lv) { const ls = await httpsJson('https://meta.fabricmc.net/v2/versions/loader'); lv = (ls.find(l => l.stable) || ls[0]).version; }
-  const url = `https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(mc)}/${encodeURIComponent(lv)}/${encodeURIComponent(inst)}/server/jar`;
-  await download(url, path.join(dir, 'server.jar'));
+  const dest = path.join(dir, 'server.jar');
+  const grab = (lv) => download(`https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(mc)}/${encodeURIComponent(lv)}/${encodeURIComponent(inst)}/server/jar`, dest);
+  const latestFor = async () => { const ls = await httpsJson(`https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(mc)}`); return ls && ls[0] && ls[0].loader && ls[0].loader.version; };
+  let lv = loaderVer || await latestFor();
+  try { await grab(lv); }
+  catch (e) {
+    // o loader fixado pelo pack pode ser velho demais pro endpoint server/jar (dá 400) — cai pro mais recente daquele MC
+    const latest = await latestFor();
+    if (!latest || latest === lv) throw e;
+    await grab(latest);
+  }
 }
 async function installQuiltServer(dir, mc, loaderVer) {
   const insts = await httpsJson('https://meta.quiltmc.org/v3/versions/installer');
@@ -855,17 +991,23 @@ function writeForgeStart(dir) {
   const sh = `#!/usr/bin/env bash\ncd "$(dirname "$0")"\n${execline}\n`;
   const f = path.join(dir, 'start.sh'); fs.writeFileSync(f, sh); try { fs.chmodSync(f, 0o755); } catch {}
 }
+// Progresso do install de modpack (um por vez neste appliance) — lido pela tela
+// de carregamento do painel via GET /api/servers/create-progress.
+let installProgress = null;
+function setPhase(phase, extra) { if (installProgress) { installProgress.phase = phase; installProgress.at = Date.now(); if (extra) Object.assign(installProgress, extra); } }
 async function createFromModpack({ name, slug, versionId }) {
   if (!multiEnabled()) throw new Error('multi-servidor não está ativo');
+  installProgress = { name: name || slug, phase: 'Preparando…', done: 0, total: 0, startedAt: Date.now(), at: Date.now() };
   const versions = await modpackVersions(slug);
   const v = pickModpackVersion(versions, versionId);
-  if (!v || !v.url) throw new Error('versão do modpack não encontrada');
+  if (!v || !v.url) { installProgress = null; throw new Error('versão do modpack não encontrada'); }
   const id = uniqueId(slugifyId(name || slug));
   const dir = path.join(CONFIG.serversDir, id);
   const tmp = path.join(os.tmpdir(), 'craftbox-mrpack-' + id);
   fs.mkdirSync(dir, { recursive: true }); fs.mkdirSync(tmp, { recursive: true });
-  let loader, mc, loaderVer;
+  let loader, mc, loaderVer, strippedMods = [];
   try {
+    setPhase('Baixando o modpack…');
     const packFile = path.join(tmp, 'pack.mrpack');
     await download(v.url, packFile);
     await unzipTo(packFile, tmp);
@@ -877,7 +1019,8 @@ async function createFromModpack({ name, slug, versionId }) {
     else if (deps['forge']) { loader = 'forge'; loaderVer = deps['forge']; }
     else if (deps['neoforge']) { loader = 'neoforge'; loaderVer = deps['neoforge']; }
     else throw new Error('loader do modpack não reconhecido');
-    // arquivos do lado servidor
+    // arquivos do lado servidor (baixados em paralelo — pool de 6)
+    const jobs = [];
     for (const f of (idx.files || [])) {
       if (f.env && f.env.server === 'unsupported') continue;
       const rel = String(f.path || '').replace(/\\/g, '/');
@@ -885,24 +1028,33 @@ async function createFromModpack({ name, slug, versionId }) {
       const dl = f.downloads && f.downloads[0]; if (!dl) continue;
       const dest = path.join(dir, rel);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      await download(dl, dest);
+      jobs.push({ dl, dest });
     }
+    setPhase('Baixando os mods…', { total: jobs.length, done: 0 });
+    await runPool(jobs, 6, async (j) => { await download(j.dl, j.dest); if (installProgress) installProgress.done++; });
     // overrides (server-overrides tem prioridade)
+    setPhase('Aplicando arquivos do pack…');
     for (const ov of ['overrides', 'server-overrides']) {
       const src = path.join(tmp, ov);
       if (fs.existsSync(src)) fs.cpSync(src, dir, { recursive: true });
     }
+    // desativa mods client-only (senão o servidor dedicado quebra no boot)
+    setPhase('Desativando mods client-only…');
+    strippedMods = await stripClientMods(dir, loader);
     // loader/servidor
+    setPhase(`Instalando o ${loader}… (pode demorar)`);
     if (loader === 'fabric') await installFabricServer(dir, mc, loaderVer);
     else if (loader === 'quilt') await installQuiltServer(dir, mc, loaderVer);
     else if (loader === 'forge') await installForgeServer(dir, mc, loaderVer);
     else if (loader === 'neoforge') await installNeoForgeServer(dir, mc, loaderVer);
   } catch (e) {
+    installProgress = null;
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
     throw new Error('falha ao instalar o modpack: ' + e.message);
   }
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  setPhase('Finalizando…');
   const port = freePort(), rconPort = port + 10, rconPass = crypto.randomBytes(6).toString('hex');
   if (!fs.existsSync(path.join(dir, 'eula.txt'))) fs.writeFileSync(path.join(dir, 'eula.txt'), 'eula=true\n');
   fs.writeFileSync(path.join(dir, '.craftbox-loader'), loader + '\n');
@@ -913,9 +1065,10 @@ async function createFromModpack({ name, slug, versionId }) {
   fs.mkdirSync(path.join(dir, 'mods'), { recursive: true });
   let proj = null; try { proj = await modrinthProject(slug); } catch {}
   const modpack = { slug, versionId: v.id, version: v.versionNumber, name: proj ? proj.title : slug, url: `https://modrinth.com/modpack/${slug}` };
-  writeInstanceMeta(dir, { name: name || (proj ? proj.title : slug), loader, mcVersion: mc || '', loaderVersion: loaderVer, port, createdAt: Date.now(), modpack });
+  writeInstanceMeta(dir, { name: name || (proj ? proj.title : slug), loader, mcVersion: mc || '', loaderVersion: loaderVer, port, createdAt: Date.now(), modpack, strippedMods });
   if (!CONFIG.activeServer) { CONFIG.activeServer = id; saveConfig(); }
-  return { id, name: name || (proj ? proj.title : slug), loader, mcVersion: mc, port, modpack };
+  installProgress = null;
+  return { id, name: name || (proj ? proj.title : slug), loader, mcVersion: mc, port, modpack, strippedMods };
 }
 
 function loaderOf(dir, metaLoader) {
@@ -1174,7 +1327,7 @@ const server = http.createServer((req, res) => {
     if (p === '/' ) return serveStatic(res, 'index.html');
     if (p.startsWith('/public/')) return serveStatic(res, p.slice('/public/'.length));
     if (p === '/app.js' || p === '/style.css') return serveStatic(res, p.slice(1));
-    if (p === '/logo.png' || (p.startsWith('/logos/') && !p.includes('..'))) return serveStatic(res, p.slice(1));
+    if (p === '/logo.png' || p === '/favicon.png' || (p.startsWith('/logos/') && !p.includes('..'))) return serveStatic(res, p.slice(1));
 
     // --- daqui pra baixo exige sessao ---
     if (p.startsWith('/api/')) {
@@ -1363,10 +1516,13 @@ const server = http.createServer((req, res) => {
         try { return json(res, 200, { versions: await modpackVersions(slug) }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
+      if (p === '/api/servers/create-progress' && req.method === 'GET') {
+        return json(res, 200, installProgress || { phase: null });
+      }
       if (p === '/api/servers/create-modpack' && req.method === 'POST') {
         const b = await readBody(req);
         if (!b.slug) return json(res, 400, { error: 'modpack não informado' });
-        try { const s = await createFromModpack({ name: b.name, slug: b.slug, versionId: b.versionId }); audit('servidor-modpack', `${s.name} (${b.slug})`); return json(res, 200, { ok: true, server: s }); }
+        try { const s = await createFromModpack({ name: b.name, slug: b.slug, versionId: b.versionId }); audit('servidor-modpack', `${s.name} (${b.slug})${s.strippedMods && s.strippedMods.length ? ` · ${s.strippedMods.length} mods client-only desativados` : ''}`); return json(res, 200, { ok: true, server: s }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/servers' && req.method === 'DELETE') {
@@ -1410,6 +1566,23 @@ const server = http.createServer((req, res) => {
       if (p === '/api/net/wifi' && req.method === 'POST') {
         const { ssid, password } = await readBody(req);
         try { const r = await wifiConnect(ssid, password); audit('wifi-conectar', ssid); return json(res, 200, r); }
+        catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      // Extras do painel: peso do mundo, teste de velocidade e toggle de exibição
+      if (p === '/api/extras' && req.method === 'GET') {
+        return json(res, 200, { show: CONFIG.showExtras !== false });
+      }
+      if (p === '/api/extras' && req.method === 'POST') {
+        const b = await readBody(req);
+        CONFIG.showExtras = !!b.show; saveConfig();
+        audit('config', `detalhes extras: ${CONFIG.showExtras ? 'visíveis' : 'ocultos'}`);
+        return json(res, 200, { show: CONFIG.showExtras });
+      }
+      if (p === '/api/worldsize' && req.method === 'GET') {
+        return json(res, 200, worldSize());
+      }
+      if (p === '/api/speedtest' && (req.method === 'POST' || req.method === 'GET')) {
+        try { return json(res, 200, await speedTest()); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/integrations/cloudflare-token' && req.method === 'POST') {

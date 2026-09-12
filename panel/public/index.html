@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>craftbox · painel</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/logo.png">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -11,7 +13,9 @@
 <!-- ================= LOGIN ================= -->
 <div id="login" class="login" hidden>
   <form id="loginForm" class="login-card">
-    <div class="brand">🧱 craftbox</div>
+    <img class="login-logo" src="/logo.png" alt="craftbox"
+         onerror="this.remove()">
+    <div class="brand">craftbox</div>
     <p class="muted small">Painel do servidor Minecraft</p>
     <input type="text" id="loginUser" placeholder="Usuário" autocomplete="username" hidden>
     <input type="password" id="pw" placeholder="Senha" autocomplete="current-password" required>
@@ -155,6 +159,24 @@
             </div>
             <div class="big"><span id="temp">—</span> <span class="unit">°C</span></div>
             <div class="sub" id="loadMeta">—</div>
+          </div>
+
+          <div class="metric clickable" id="worldCard" title="Clique para medir de novo">
+            <div class="metric-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0z"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              <span class="lbl">Peso do mundo</span>
+            </div>
+            <div class="big" id="worldSize">—</div>
+            <div class="sub" id="worldMeta">—</div>
+          </div>
+
+          <div class="metric clickable" id="speedCard" title="Clique para testar a velocidade">
+            <div class="metric-head">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+              <span class="lbl">Velocidade da internet</span>
+            </div>
+            <div class="big"><span id="netSpeed">—</span> <span class="unit">Mbps</span></div>
+            <div class="sub" id="speedMeta">clique para testar</div>
           </div>
         </div>
       </section>
@@ -389,6 +411,18 @@
       <h3 style="margin-top:1.2rem">Existentes</h3>
       <div id="srvList" style="margin-top:.6rem"></div>
     </div>
+  </div>
+</div>
+
+<!-- ============ TELA DE CARREGAMENTO (install de modpack) ============ -->
+<div id="loadingOverlay" class="loading-overlay" hidden>
+  <div class="loading-card">
+    <div class="loading-spinner"></div>
+    <div class="loading-title" id="loadingTitle">Instalando modpack…</div>
+    <div class="loading-phase" id="loadingPhase">Preparando…</div>
+    <div class="loading-bar"><div class="loading-fill" id="loadingFill"></div></div>
+    <div class="loading-meta" id="loadingMeta">iniciando…</div>
+    <div class="loading-hint">Isso pode levar de alguns segundos a alguns minutos. Pode deixar essa aba aberta.</div>
   </div>
 </div>
 

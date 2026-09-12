@@ -34,7 +34,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
 async function showApp() { $('#app').hidden = false; await loadServers(); reloadAll(); }
-function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); loadNet(); }
+function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); loadNet(); measureWorld(); }
 
 // ---- multi-servidor ----
 async function loadServers() {
@@ -594,12 +594,47 @@ $('#serversManage').addEventListener('click', () => { $('#srvOverlay').hidden = 
 $('#tabServers').addEventListener('click', loadServers);
 $('#srvClose').addEventListener('click', () => $('#srvOverlay').hidden = true);
 $('#srvOverlay').addEventListener('click', (e) => { if (e.target === $('#srvOverlay')) $('#srvOverlay').hidden = true; });
+// ---- tela de carregamento (install de servidor/modpack) ----
+let loadingPollTimer = null, loadingStart = 0;
+function fmtElapsed(ms) { const s = Math.floor(ms / 1000); return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's'; }
+function showLoading(title, poll) {
+  loadingStart = Date.now();
+  $('#loadingTitle').textContent = title || 'Instalando…';
+  $('#loadingPhase').textContent = 'Preparando…';
+  $('#loadingMeta').textContent = 'iniciando…';
+  const fill = $('#loadingFill'); fill.style.width = '0%'; fill.classList.add('indeterminate');
+  $('#loadingOverlay').hidden = false;
+  clearInterval(loadingPollTimer); loadingPollTimer = null;
+  if (poll) { loadingPollTimer = setInterval(pollProgress, 800); pollProgress(); }
+  else { tickElapsed(); loadingPollTimer = setInterval(tickElapsed, 1000); }
+}
+function hideLoading() { clearInterval(loadingPollTimer); loadingPollTimer = null; $('#loadingOverlay').hidden = true; }
+function tickElapsed() { $('#loadingMeta').textContent = 'tempo: ' + fmtElapsed(Date.now() - loadingStart); }
+async function pollProgress() {
+  const { ok, data } = await api('/api/servers/create-progress');
+  const elapsed = Date.now() - loadingStart;
+  if (!ok || !data || !data.phase) { tickElapsed(); return; }
+  $('#loadingPhase').textContent = data.phase;
+  const fill = $('#loadingFill');
+  if (data.total > 0) {
+    fill.classList.remove('indeterminate');
+    const pc = Math.min(100, Math.round(data.done / data.total * 100));
+    fill.style.width = pc + '%';
+    $('#loadingMeta').textContent = `${data.done} / ${data.total} mods · ${pc}% · ${fmtElapsed(elapsed)}`;
+  } else {
+    fill.classList.add('indeterminate');
+    $('#loadingMeta').textContent = 'tempo: ' + fmtElapsed(elapsed);
+  }
+}
+
 $('#srvCreateForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = $('#srvName').value.trim(); if (!name) return;
   const loader = $('#srvLoader').value, version = $('#srvVersion').value.trim();
-  const btn = $('#srvCreateBtn'); btn.disabled = true; btn.textContent = 'criando… (baixando o servidor)';
+  const btn = $('#srvCreateBtn'); btn.disabled = true; btn.textContent = 'criando…';
+  showLoading('Criando "' + name + '"…', false);
   const r = await api('/api/servers/create', { method: 'POST', body: JSON.stringify({ name, loader, version }) });
+  hideLoading();
   btn.disabled = false; btn.textContent = 'Criar servidor';
   if (!r.ok) { toast(r.data.error || 'falha ao criar', 'err'); return; }
   $('#srvName').value = ''; $('#srvVersion').value = '';
@@ -626,13 +661,17 @@ function mpCard(r) {
     <div class="store-foot"><span class="muted small">⬇ ${fmtNum(r.downloads)}</span><span class="grow"></span>
       <button class="ok sm btn-mp-create">Criar servidor</button></div>`;
   el.querySelector('.btn-mp-create').onclick = async (ev) => {
+    const btn = ev.currentTarget; // capturar antes do await (depois vira null)
     if (!await confirmDialog(`Criar um servidor a partir de "${r.title}"?\n\nBaixa todos os mods do pack (de segundos a alguns minutos, dependendo do tamanho).`, { okText: 'Criar' })) return;
-    const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'instalando…';
+    btn.disabled = true; btn.textContent = 'instalando…';
     const name = $('#mpName').value.trim();
+    showLoading('Instalando "' + r.title + '"…', true);
     const { ok, data } = await api('/api/servers/create-modpack', { method: 'POST', body: JSON.stringify({ slug: r.slug, name }) });
+    hideLoading();
     btn.disabled = false; btn.textContent = 'Criar servidor';
     if (!ok) { toast(data.error || 'falha ao criar', 'err'); return; }
-    toast('Modpack instalado: ' + data.server.name + ' — porta ' + data.server.port);
+    const strip = (data.server.strippedMods || []).length;
+    toast('Modpack instalado: ' + data.server.name + ' — porta ' + data.server.port + (strip ? ` · ${strip} mods client-only desativados` : ''));
     await loadServers(); renderServerManager();
   };
   return el;
@@ -775,6 +814,37 @@ async function scanWifi() {
   });
 }
 $('#netReload').addEventListener('click', loadNet);
+
+// ---- detalhes extras (peso do mundo, velocidade) ----
+function fmtBytes(n) {
+  n = n || 0;
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+}
+async function measureWorld() {
+  const el = $('#worldSize'), meta = $('#worldMeta'); if (!el) return;
+  el.textContent = '…'; meta.textContent = 'medindo…';
+  const { ok, data } = await api('/api/worldsize');
+  if (!ok) { el.textContent = '—'; meta.textContent = 'não consegui medir'; return; }
+  el.textContent = fmtBytes(data.bytes);
+  meta.textContent = data.dirs && data.dirs.length ? data.dirs.join(', ') : 'sem mundo ainda';
+}
+let speedBusy = false;
+async function runSpeed() {
+  if (speedBusy) return;
+  speedBusy = true;
+  const el = $('#netSpeed'), meta = $('#speedMeta');
+  el.textContent = '…'; meta.textContent = 'testando…';
+  const { ok, data } = await api('/api/speedtest', { method: 'POST' });
+  speedBusy = false;
+  if (!ok) { el.textContent = '—'; meta.textContent = data.error || 'falhou · clique pra tentar'; return; }
+  el.textContent = data.mbps;
+  meta.textContent = `${fmtBytes(data.bytes)} em ${data.secs}s · clique pra refazer`;
+}
+$('#worldCard').addEventListener('click', measureWorld);
+$('#speedCard').addEventListener('click', runSpeed);
 
 // ---- auditoria ----
 async function loadAudit() {
