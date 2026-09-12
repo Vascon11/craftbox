@@ -364,6 +364,21 @@ cat > /mnt/etc/motd <<EOF
 
 EOF
 
+# tela de boas-vindas no CONSOLE (acima do "login:") — o agetty troca \4 pelo IP real
+cat > /mnt/etc/issue <<ISSUE
+
+  ============================================================
+   craftbox  -  $HOSTNAME
+  ============================================================
+
+   >> Painel web:   http://\\4:8080
+   >> Entrar SSH:   ssh $USERNAME@\\4
+
+   Servidor "$SRVNAME" ($MCTYPE) rodando na porta 25565.
+   Abra o painel no navegador pra gerenciar tudo.
+
+ISSUE
+
 # painel web: copia pro sistema instalado (vem embarcado na ISO em /opt/craftbox-panel)
 if [ -d /opt/craftbox-panel ]; then
   mkdir -p /mnt/opt/craftbox-panel
@@ -497,10 +512,13 @@ umount -R /mnt || true
 echo
 ok "INSTALACAO CONCLUIDA!"
 echo
-echo "  Ao reiniciar, o servidor '$SRVNAME' sobe sozinho na porta 25565,"
-echo "  e o PAINEL WEB fica em:  http://<ip-do-servidor>:8080"
-echo "  Acesse via SSH:  ssh $USERNAME@<ip-do-servidor>"
-echo "  Status do servidor:  systemctl status minecraft@$SRVID"
+IPADDR=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+echo "  Ao reiniciar, o servidor '$SRVNAME' sobe sozinho na porta 25565."
+echo
+echo "  >> PAINEL WEB:  http://${IPADDR:-<ip-do-servidor>}:8080   (use a senha do painel)"
+echo "  >> SSH:         ssh $USERNAME@${IPADDR:-<ip-do-servidor>}"
+echo
+echo "  (esse endereço também aparece na tela da máquina, acima do login)"
 echo
 if yesno "Reiniciar agora? (tire o pendrive quando apagar a tela)" s; then
   reboot
