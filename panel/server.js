@@ -111,7 +111,7 @@ function serverCtx(id) {
   if (!multiEnabled()) return { id: 'default', dir: CONFIG.mcDir, service: CONFIG.service, name: 'Servidor', legacy: true };
   const dir = path.join(CONFIG.serversDir, id);
   const meta = readInstanceMeta(dir);
-  return { id, dir, service: CONFIG.serviceTemplate + id, name: meta.name || id, loader: meta.loader || '', mcVersion: meta.mcVersion || '', port: meta.port, modpack: meta.modpack || null };
+  return { id, dir, service: CONFIG.serviceTemplate + id, name: meta.name || id, loader: meta.loader || '', mcVersion: meta.mcVersion || '', port: meta.port, modpack: meta.modpack || null, rconPort: meta.rconPort, rconPassword: meta.rconPassword };
 }
 function currentId(url) {
   if (!multiEnabled()) return 'default';
@@ -255,11 +255,14 @@ function writeProps(updates) {
 function rconPassword() {
   const fromProps = readProps()['rcon.password'];
   if (fromProps) return fromProps;
+  const s = SRV(); if (s && s.rconPassword) return s.rconPassword; // pumpkin (guarda no meta)
   return CONFIG.rcon.password || '';
 }
 function rconPort() {
   const fromProps = parseInt(readProps()['rcon.port'], 10);
-  return fromProps || CONFIG.rcon.port || 25575;
+  if (fromProps) return fromProps;
+  const s = SRV(); if (s && s.rconPort) return +s.rconPort; // pumpkin
+  return CONFIG.rcon.port || 25575;
 }
 function rcon(command) {
   return new Promise((resolve, reject) => {
@@ -685,12 +688,42 @@ function uniqueId(base) {
   while (existing.has(id)) id = `${base}-${n++}`;
   return id;
 }
+// baixa e configura um servidor Pumpkin (Rust, binário único, sem Java) — experimental
+async function installPumpkin(dir, o) {
+  const asset = os.arch() === 'arm64' ? 'pumpkin-ARM64-Linux-musl' : 'pumpkin-X64-Linux-musl';
+  const rel = await httpsJson('https://api.github.com/repos/Pumpkin-MC/Pumpkin/releases/latest');
+  const a = (rel.assets || []).find(x => x.name === asset);
+  if (!a) throw new Error('binário do Pumpkin não encontrado pra esta arquitetura');
+  await download(a.browser_download_url, path.join(dir, 'pumpkin'));
+  try { fs.chmodSync(path.join(dir, 'pumpkin'), 0o755); } catch {}
+  const motd = String(o.motd || 'craftbox pumpkin').replace(/"/g, '');
+  const toml = `# config parcial — o Pumpkin preenche o resto com defaults\n[networking.java]\naddress = "0.0.0.0:${o.port}"\nmotd = "${motd}"\nmax_players = 10\n\n[networking.rcon]\nenabled = true\naddress = "0.0.0.0:${o.rconPort}"\npassword = "${o.rconPass}"\n`;
+  fs.writeFileSync(path.join(dir, 'pumpkin.toml'), toml);
+  const m = String(rel.tag_name || '').match(/\+(\d+\.\d+(?:\.\d+)?)/);
+  return m ? m[1] : (rel.tag_name || 'dev');
+}
 async function createInstance({ name, loader, version }) {
   if (!multiEnabled()) throw new Error('multi-servidor não está ativo (defina serversDir no config.json)');
-  loader = loader === 'fabric' ? 'fabric' : 'paper';
+  loader = loader === 'fabric' ? 'fabric' : loader === 'pumpkin' ? 'pumpkin' : 'paper';
   const id = uniqueId(slugifyId(name));
   const dir = path.join(CONFIG.serversDir, id);
   fs.mkdirSync(dir, { recursive: true });
+  const port = freePort(), rconPort = port + 10, rconPass = crypto.randomBytes(6).toString('hex');
+
+  if (loader === 'pumpkin') {
+    let resolvedVer;
+    try { resolvedVer = await installPumpkin(dir, { port, rconPort, rconPass, motd: name }); }
+    catch (e) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} throw new Error('falha ao baixar o Pumpkin: ' + e.message); }
+    fs.writeFileSync(path.join(dir, '.craftbox-loader'), 'pumpkin\n');
+    const sh = `#!/usr/bin/env bash\ncd "$(dirname "$0")"\nexec ./pumpkin\n`;
+    const f = path.join(dir, 'start.sh'); fs.writeFileSync(f, sh); try { fs.chmodSync(f, 0o755); } catch {}
+    writeBackupScript(dir);
+    fs.mkdirSync(path.join(dir, 'plugins'), { recursive: true });
+    writeInstanceMeta(dir, { name: name || id, loader: 'pumpkin', mcVersion: resolvedVer, port, rconPort, rconPassword: rconPass, createdAt: Date.now() });
+    if (!CONFIG.activeServer) { CONFIG.activeServer = id; saveConfig(); }
+    return { id, name: name || id, loader: 'pumpkin', mcVersion: resolvedVer, port };
+  }
+
   let resolvedVer = version || '';
   try {
     const r = loader === 'paper' ? await paperResolve(version) : await fabricResolveServer(version);
@@ -700,7 +733,6 @@ async function createInstance({ name, loader, version }) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
     throw new Error('falha ao baixar o servidor: ' + e.message);
   }
-  const port = freePort(), rconPort = port + 10, rconPass = crypto.randomBytes(6).toString('hex');
   fs.writeFileSync(path.join(dir, 'eula.txt'), 'eula=true\n');
   fs.writeFileSync(path.join(dir, '.craftbox-loader'), loader + '\n');
   writeServerProps(dir, { port, rconPort, rconPass, motd: name });

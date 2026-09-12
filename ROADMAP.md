@@ -32,7 +32,10 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 - [ ] Depois do RC: validar o RC final numa VM (painel no boot + tela de boas-vindas), colher feedback e soltar a `v1.0.0` estável.
 
 ## Ideias / futuro
-- [ ] **Servidor Pumpkin** (Rust, binário único sem Java, ~100MB RAM, multi-core) como tipo experimental na criação de servidor — encaixaria muito no hardware fraco; ainda é beta. Alternativa parecida: SteelMC. Ver [nota de pesquisa].
+- [x] **Servidor Pumpkin** (Rust, binário único sem Java) como tipo **experimental** na criação de servidor ✅ — baixa o binário da release oficial, configura porta/MOTD/RCON via `pumpkin.toml` (config parcial), sobe em ~4s; RCON e Bedrock nativos funcionam pelo painel. Validado no demo.
+  - Ressalvas: usa config próprio (o editor de `server.properties` e a loja de mods do painel não se aplicam); ignora SIGTERM (o "Desligar" espera o timeout do systemd antes do SIGKILL); é beta (0.1.0-dev). Alternativa parecida: SteelMC.
+- [ ] Suavizar o stop do Pumpkin (KillSignal/kill mais rápido) e adaptar a UI (esconder loja/props pra pumpkin).
+- [ ] Reescrever o **backend do painel em Rust** (endgame de otimização).
 
 ## Fase final — otimização (o "endgame", é difícil e tudo bem)
 - [ ] **Reescrever o backend em Rust** (hoje é Node.js puro). Objetivo: binário único, sem runtime, footprint menor de RAM/CPU — importante num notebook fraco.
