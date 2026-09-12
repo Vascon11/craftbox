@@ -312,3 +312,6 @@ button.sm{padding:.4rem .7rem;font-size:.82rem;border-radius:8px}
 
 /* logo (imagem opcional; cai pro emoji se não existir /logo.png) */
 .side-brand .logo-img{width:30px;height:30px;object-fit:contain;border-radius:7px;flex:none}
+
+/* logos das integrações (imagem no lugar do emoji) */
+.intg-ic img{width:30px;height:30px;object-fit:contain;display:block}

@@ -1123,7 +1123,7 @@ function readBody(req) {
     req.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { resolve({}); } });
   });
 }
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 function serveStatic(res, file) {
   const full = path.join(PUBLIC, file);
   if (!full.startsWith(PUBLIC)) { res.writeHead(403); return res.end('forbidden'); }
@@ -1174,6 +1174,7 @@ const server = http.createServer((req, res) => {
     if (p === '/' ) return serveStatic(res, 'index.html');
     if (p.startsWith('/public/')) return serveStatic(res, p.slice('/public/'.length));
     if (p === '/app.js' || p === '/style.css') return serveStatic(res, p.slice(1));
+    if (p === '/logo.png' || (p.startsWith('/logos/') && !p.includes('..'))) return serveStatic(res, p.slice(1));
 
     // --- daqui pra baixo exige sessao ---
     if (p.startsWith('/api/')) {

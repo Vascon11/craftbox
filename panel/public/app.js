@@ -682,7 +682,7 @@ function renderIntegrations(d) {
       else body += `<div class="muted small">túnel no ar. Configure a porta no painel do playit.gg; o endereço aparece aqui (clique em Atualizar).</div>`;
       body += `<div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desligar</button></div>`;
     }
-    el.innerHTML = `<div class="intg-head"><div class="intg-ic">🌍</div><div class="intg-meta"><div class="intg-title">playit.gg</div><div class="muted small">Servidor público sem abrir porta no roteador (túnel TCP). Ideal pra Minecraft.</div></div>${intgPill(p.running)}</div><div class="intg-body">${body}</div>`;
+    el.innerHTML = `<div class="intg-head"><div class="intg-ic"><img src="/logos/playit.svg" alt=""></div><div class="intg-meta"><div class="intg-title">playit.gg</div><div class="muted small">Servidor público sem abrir porta no roteador (túnel TCP). Ideal pra Minecraft.</div></div>${intgPill(p.running)}</div><div class="intg-body">${body}</div>`;
     el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
       const a = ev.currentTarget.dataset.a;
       if (a === 'secret') { const s = el.querySelector('.pl-secret').value.trim(); if (!s) return; const r = await api('/api/integrations/playit-secret', { method: 'POST', body: JSON.stringify({ secret: s }) }); toast(r.ok ? 'Secret salvo — agora ligue o túnel.' : (r.data.error || 'erro')); return loadIntegrations(); }
@@ -701,7 +701,7 @@ function renderIntegrations(d) {
     if (!t.installed) body = `<div class="intg-note">Precisa instalar no sistema (root): <code>sudo dnf install tailscale && sudo systemctl enable --now tailscaled</code></div>`;
     else if (!t.running) body = `<button class="ok sm act" data-a="start">Conectar (login)</button><div class="muted small" style="margin-top:.4rem">Se pedir permissão, rode uma vez <code>sudo tailscale up</code>.</div>`;
     else body = `<div class="intg-note ok">Conectado. IP Tailscale: <code>${esc(t.ip || '?')}</code> — amigos na sua rede Tailscale entram por <code>${esc(t.ip || 'IP')}:PORTA</code>.</div><div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desconectar</button></div><div class="muted small" style="margin-top:.4rem">Se o botão der erro de permissão, rode uma vez: <code>sudo tailscale set --operator=$USER</code></div>`;
-    el.innerHTML = `<div class="intg-head"><div class="intg-ic">🔒</div><div class="intg-meta"><div class="intg-title">Tailscale</div><div class="muted small">VPN privada: só quem você convidar acessa. Ótimo pra jogar entre amigos.</div></div>${intgPill(t.running)}</div><div class="intg-body">${body}</div>`;
+    el.innerHTML = `<div class="intg-head"><div class="intg-ic"><img src="/logos/tailscale.svg" alt=""></div><div class="intg-meta"><div class="intg-title">Tailscale</div><div class="muted small">VPN privada: só quem você convidar acessa. Ótimo pra jogar entre amigos.</div></div>${intgPill(t.running)}</div><div class="intg-body">${body}</div>`;
     el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
       const a = ev.currentTarget.dataset.a; ev.currentTarget.disabled = true;
       const r = await intgAction('tailscale', a);
@@ -723,7 +723,7 @@ function renderIntegrations(d) {
       if (!c.running) body += `<div class="row" style="margin-top:.5rem"><button class="ok sm act" data-a="start"${c.hasToken ? '' : ' disabled title="salve o token primeiro"'}>Ligar túnel</button></div>`;
       else body += `<div class="intg-note ok" style="margin-top:.5rem">Túnel ligado.</div><div class="row" style="margin-top:.5rem"><button class="danger sm act" data-a="stop">Desligar</button></div>`;
     }
-    el.innerHTML = `<div class="intg-head"><div class="intg-ic">☁️</div><div class="intg-meta"><div class="intg-title">Cloudflare Tunnel</div><div class="muted small">Expõe o painel/serviço por um domínio, com túnel seguro.</div></div>${intgPill(c.running)}</div><div class="intg-body">${body}</div>`;
+    el.innerHTML = `<div class="intg-head"><div class="intg-ic"><img src="/logos/cloudflare.svg" alt=""></div><div class="intg-meta"><div class="intg-title">Cloudflare Tunnel</div><div class="muted small">Expõe o painel/serviço por um domínio, com túnel seguro.</div></div>${intgPill(c.running)}</div><div class="intg-body">${body}</div>`;
     el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
       const a = ev.currentTarget.dataset.a;
       if (a === 'token') { const tok = el.querySelector('.cf-token').value.trim(); if (!tok) return; const r = await api('/api/integrations/cloudflare-token', { method: 'POST', body: JSON.stringify({ token: tok }) }); toast(r.ok ? 'Token salvo.' : (r.data.error || 'erro')); return loadIntegrations(); }
