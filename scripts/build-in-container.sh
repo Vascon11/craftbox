@@ -23,6 +23,11 @@ cat /build/packages.extra >> /tmp/profile/packages.x86_64
 cp -rT /build/airootfs /tmp/profile/airootfs
 chmod 755 /tmp/profile/airootfs/usr/local/bin/mc-install
 
+# 2b) embarca o painel web na ISO (o mc-install copia de /opt/craftbox-panel pro sistema)
+mkdir -p /tmp/profile/airootfs/opt/craftbox-panel
+cp -rT /build/panel /tmp/profile/airootfs/opt/craftbox-panel
+rm -f /tmp/profile/airootfs/opt/craftbox-panel/config.json
+
 # 3) identidade da ISO
 sed -i 's/^iso_name=.*/iso_name="craftbox"/'                                   /tmp/profile/profiledef.sh
 sed -i "s/^iso_label=.*/iso_label=\"CRAFTBOX_$(date +%Y%m)\"/"                 /tmp/profile/profiledef.sh

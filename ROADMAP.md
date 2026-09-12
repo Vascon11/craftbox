@@ -22,8 +22,9 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 - [ ] **Logo** do craftbox 🎨 — encaixe pronto no painel (basta soltar `panel/public/logo.png`); arte com um amigo.
 
 ## Appliance real (notebook Dell) — pra funcionar fora do demo
-- [ ] Instalar no sistema o **systemd template** `minecraft@.service` + regra de **sudoers** (`systemctl start/stop/restart minecraft@*`).
-- [ ] Ajustar `mc-install` (ISO) e `setup.sh` pra criar o 1º servidor já em `serversDir` (multi-servidor por padrão).
+- [x] **systemd template** `minecraft@.service` + `mc-backup@` + regra de **sudoers** (`systemctl … minecraft@*`) no `mc-install`/`setup.sh`. ✅
+- [x] `mc-install` cria o 1º servidor em `serversDir` (`/srv/minecraft/<id>`, multi-servidor por padrão) e **embarca + configura o painel** (sobe no boot). ✅
+- [ ] **Bootar a ISO nova numa VM** pra validar o fluxo completo de ponta a ponta (não deu pra testar em hardware aqui).
 - [ ] Testar **Forge/NeoForge** de verdade (modpack) com uma versão de Java compatível.
 - [ ] Soltar uma **release/tag** pra o CI publicar a ISO nova nos Releases.
 

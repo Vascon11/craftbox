@@ -42,13 +42,15 @@ Ao dar boot, o instalador (`mc-install`) abre **automaticamente** e cuida de tud
 - 🌐 **Rede** — detecta cabo (DHCP) ou pergunta o Wi-Fi e **guarda a conexão** pro sistema instalado (via NetworkManager)
 - 💽 **Instalação automática** — particiona (UEFI/GPT), formata e instala um Arch mínimo no disco
 - 🎮 **Escolha do servidor na hora** — **Paper** (plugins, leve) ou **Fabric** (mods, com mods de performance já incluídos)
+- 🖥️ **Painel web já embarcado** — o `craftbox-panel` vem instalado e sobe no boot em `http://<ip>:8080` (você define a senha na instalação)
+- 🗂️ **Multi-servidor de fábrica** — cada instância fica em `/srv/minecraft/<nome>` com seu serviço `minecraft@<nome>`; crie/troque servidores pelo painel
 - 🧠 **Heap da JVM auto-dimensionado** pela RAM detectada + **[flags do Aikar](https://docs.papermc.io/paper/aikars-flags)** aplicadas
 - ⚙️ **Otimizado pra CPU fraca** — `view-distance` e `simulation-distance` calibrados
 - 🔒 **SSH** pronto (com sua chave pública, se você colar uma) + teclado ABNT2 e timezone BR
 - 💻 **Fechar a tampa não desliga** (`HandleLidSwitch=ignore`) — o notebook vira um "servidor de tampa fechada"
-- 💾 **Backup diário** do mundo (mantém os últimos 7)
-- 🕹️ **RCON** habilitado pra mandar comandos no servidor via SSH
-- ♻️ **systemd** cuida do servidor: sobe no boot, reinicia sozinho se cair
+- 💾 **Backup diário** do mundo por instância (mantém os últimos 7)
+- 🕹️ **RCON** habilitado (usado pelo painel e via SSH)
+- ♻️ **systemd** cuida de tudo: servidor e painel sobem no boot e reiniciam sozinhos se caírem
 
 > **Nota de licenciamento:** a ISO **não** redistribui os `.jar` da Mojang/Paper/Fabric. O instalador os baixa das fontes oficiais na hora da instalação, e pede que você aceite a [EULA da Mojang](https://aka.ms/MinecraftEULA).
 
@@ -88,16 +90,19 @@ Ou use uma GUI: Fedora Media Writer, balenaEtcher, GNOME Disks. Também funciona
 
 ### 3. Instalar
 
-Dê boot pelo pendrive → o instalador abre sozinho → responda as perguntas → ele instala e reinicia já servindo Minecraft na porta **25565**.
+Dê boot pelo pendrive → o instalador abre sozinho → responda as perguntas (inclusive a **senha do painel**) → ele instala e reinicia já servindo Minecraft na porta **25565**, com o **painel em `http://<ip>:8080`**.
 
-### 4. Administrar (via SSH)
+### 4. Administrar
+
+O jeito principal é o **painel web** (`http://<ip-do-servidor>:8080`). Pela linha de comando (SSH), lembrando que cada instância é `minecraft@<nome>`:
 
 ```bash
 ssh SEU_USUARIO@IP_DO_SERVIDOR
-systemctl status minecraft          # status
-journalctl -u minecraft -f          # log ao vivo
-sudo systemctl restart minecraft    # reiniciar
-/opt/minecraft/backup.sh            # backup manual do mundo
+systemctl status minecraft@principal        # status da instância
+journalctl -u minecraft@principal -f        # log ao vivo
+sudo systemctl restart minecraft@principal  # reiniciar
+systemctl status craftbox-panel             # o painel web
+/srv/minecraft/principal/backup.sh          # backup manual do mundo
 ```
 
 ---
@@ -136,6 +141,7 @@ craftbox/
 │   ├── usr/local/bin/mc-install    # o instalador (coração do projeto)
 │   ├── root/.zprofile              # abre o instalador automaticamente no boot
 │   └── etc/motd
+├── panel/                          # o painel web (embarcado na ISO pelo build)
 ├── packages.extra                  # pacotes extras do ambiente live
 ├── scripts/build-in-container.sh   # monta a ISO (roda dentro do container Arch)
 ├── build.sh                        # wrapper de build local (Docker)

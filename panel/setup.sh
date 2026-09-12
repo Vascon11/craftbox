@@ -24,7 +24,25 @@ HASH_JSON=$(sudo -u minecraft node "$DEST/server.js" --hash "$PW" | tail -n +2)
 
 echo "==> Gerando config.json"
 SECRET=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
-cat > "$DEST/config.json" <<EOF
+if [ -d /srv/minecraft ]; then
+  # modo multi-servidor (appliance): instancias em /srv/minecraft
+  FIRST=$(ls -1 /srv/minecraft 2>/dev/null | head -1)
+  cat > "$DEST/config.json" <<EOF
+{
+  "port": 8080,
+  "host": "0.0.0.0",
+  "serversDir": "/srv/minecraft",
+  "serviceTemplate": "minecraft@",
+  "activeServer": "${FIRST:-principal}",
+  "systemctlUser": false,
+  "rcon": { "host": "127.0.0.1", "port": 25575, "password": "" },
+  "auth": $HASH_JSON,
+  "sessionSecret": "$SECRET"
+}
+EOF
+else
+  # modo 1 servidor (legado)
+  cat > "$DEST/config.json" <<EOF
 {
   "port": 8080,
   "host": "0.0.0.0",
@@ -35,12 +53,14 @@ cat > "$DEST/config.json" <<EOF
   "sessionSecret": "$SECRET"
 }
 EOF
+fi
 chown minecraft:minecraft "$DEST/config.json"
 chmod 600 "$DEST/config.json"
 
 echo "==> Permissao pro painel controlar o servico (sudoers)"
 cat > /etc/sudoers.d/craftbox-panel <<EOF
 minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start $SERVICE, /usr/bin/systemctl stop $SERVICE, /usr/bin/systemctl restart $SERVICE
+minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft@*, /usr/bin/systemctl stop minecraft@*, /usr/bin/systemctl restart minecraft@*
 minecraft ALL=(root) NOPASSWD: /usr/bin/tailscale up *, /usr/bin/tailscale down
 EOF
 chmod 440 /etc/sudoers.d/craftbox-panel

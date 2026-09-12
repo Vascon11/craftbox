@@ -98,9 +98,18 @@ while [ -z "$MCTYPE" ]; do
   esac
 done
 MCVER=$(ask "Versao do Minecraft (enter = ultima estavel)" "latest")
+SRVNAME=$(ask "Nome do primeiro servidor" "Principal")
 MC_MOTD=$(ask "Mensagem do servidor (MOTD)" "Servidor do vascon1 e amigos")
 MC_MAXP=$(ask "Maximo de jogadores" "8")
 MC_DIFF=$(ask "Dificuldade (peaceful/easy/normal/hard)" "normal")
+echo
+say "Painel web (craftbox-panel)"
+while :; do
+  PANELPW=$(askpw "Defina a senha do painel web")
+  PANELPW2=$(askpw "Repita a senha do painel")
+  [ "$PANELPW" = "$PANELPW2" ] && [ -n "$PANELPW" ] && break
+  warn "Senhas nao batem ou vazia, tente de novo."
+done
 echo
 warn "Voce precisa ACEITAR a EULA da Mojang pra rodar o servidor:"
 echo "  https://aka.ms/MinecraftEULA"
@@ -161,8 +170,12 @@ genfstab -U /mnt >> /mnt/etc/fstab
 # ---------------------------------------------------------------------------
 # 6) Baixando o Minecraft (feito aqui no live, que tem curl+jq)
 # ---------------------------------------------------------------------------
-MCDIR=/mnt/opt/minecraft
-mkdir -p "$MCDIR/mods" "$MCDIR/backups"
+# layout multi-servidor: cada instancia e uma subpasta de /srv/minecraft
+SDIR=/srv/minecraft
+SRVID=$(printf '%s' "${SRVNAME:-Principal}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//;s/-*$//')
+[ -z "$SRVID" ] && SRVID=principal
+MCDIR=/mnt$SDIR/$SRVID
+mkdir -p "$MCDIR/mods" "$MCDIR/plugins" "$MCDIR/backups"
 echo "$MCTYPE" > "$MCDIR/.craftbox-loader"
 say "Baixando servidor ($MCTYPE)"
 UA="mc-install/1.0 (vascon1 minecraft appliance)"
@@ -202,6 +215,11 @@ else
   done
 fi
 
+# metadados da instancia (lidos pelo painel)
+cat > "$MCDIR/.craftbox-instance.json" <<EOF
+{ "name": "$SRVNAME", "loader": "$MCTYPE", "mcVersion": "$MCVER", "port": 25565, "createdAt": 0 }
+EOF
+
 # arquivos de config do servidor
 cat > "$MCDIR/eula.txt" <<EOF
 # gerado pelo instalador — https://aka.ms/MinecraftEULA
@@ -228,7 +246,7 @@ EOF
 # script de start com flags do Aikar
 cat > "$MCDIR/start.sh" <<EOF
 #!/usr/bin/env bash
-cd /opt/minecraft
+cd "\$(dirname "\$0")"
 exec /usr/bin/java \\
   -Xms${HEAP}M -Xmx${HEAP}M \\
   -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \\
@@ -247,7 +265,7 @@ chmod +x "$MCDIR/start.sh"
 cat > "$MCDIR/backup.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-cd /opt/minecraft
+cd "$(dirname "$0")"
 ts=$(date +%Y%m%d-%H%M)
 tar czf "backups/world-$ts.tar.gz" world world_nether world_the_end 2>/dev/null || \
   tar czf "backups/world-$ts.tar.gz" world 2>/dev/null || true
@@ -292,18 +310,18 @@ HandleLidSwitchExternalPower=ignore
 HandleLidSwitchDocked=ignore
 EOF
 
-# servico do minecraft
-cat > /mnt/etc/systemd/system/minecraft.service <<EOF
+# servico do minecraft — TEMPLATE (uma unidade por instancia: minecraft@<id>)
+cat > /mnt/etc/systemd/system/minecraft@.service <<'EOF'
 [Unit]
-Description=Servidor Minecraft ($MCTYPE)
+Description=Servidor Minecraft (%i)
 After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
 User=minecraft
 Group=minecraft
-WorkingDirectory=/opt/minecraft
-ExecStart=/opt/minecraft/start.sh
+WorkingDirectory=/srv/minecraft/%i
+ExecStart=/srv/minecraft/%i/start.sh
 Restart=on-failure
 RestartSec=15
 # Paper/vanilla salvam o mundo ao receber SIGTERM
@@ -313,18 +331,18 @@ TimeoutStopSec=90
 WantedBy=multi-user.target
 EOF
 
-# backup diario
-cat > /mnt/etc/systemd/system/mc-backup.service <<EOF
+# backup diario — TEMPLATE por instancia (mc-backup@<id>)
+cat > /mnt/etc/systemd/system/mc-backup@.service <<'EOF'
 [Unit]
-Description=Backup do mundo do Minecraft
+Description=Backup do mundo (%i)
 [Service]
 Type=oneshot
 User=minecraft
-ExecStart=/opt/minecraft/backup.sh
+ExecStart=/srv/minecraft/%i/backup.sh
 EOF
-cat > /mnt/etc/systemd/system/mc-backup.timer <<EOF
+cat > /mnt/etc/systemd/system/mc-backup@.timer <<'EOF'
 [Unit]
-Description=Backup diario do mundo do Minecraft
+Description=Backup diario do mundo (%i)
 [Timer]
 OnCalendar=*-*-* 05:00:00
 Persistent=true
@@ -335,16 +353,26 @@ EOF
 # mensagem de boas-vindas por SSH
 cat > /mnt/etc/motd <<EOF
 
-  Servidor Minecraft ($MCTYPE) — $HOSTNAME
-  ---------------------------------------------
-  status:   systemctl status minecraft
-  logs:     journalctl -u minecraft -f
-  console:  screen -r  (nao configurado por padrao — use RCON)
-  reiniciar:sudo systemctl restart minecraft
-  backup:   /opt/minecraft/backup.sh
-  pasta:    /opt/minecraft
+  craftbox — $HOSTNAME   (servidor inicial: $SRVNAME · $MCTYPE)
+  ------------------------------------------------------------
+  painel web:  http://<ip-desta-maquina>:8080
+  status:      systemctl status minecraft@$SRVID
+  logs:        journalctl -u minecraft@$SRVID -f
+  reiniciar:   sudo systemctl restart minecraft@$SRVID
+  instancias:  /srv/minecraft/<nome>    (gerencie tudo pelo painel)
+  painel:      /opt/craftbox-panel
 
 EOF
+
+# painel web: copia pro sistema instalado (vem embarcado na ISO em /opt/craftbox-panel)
+if [ -d /opt/craftbox-panel ]; then
+  mkdir -p /mnt/opt/craftbox-panel
+  cp -rT /opt/craftbox-panel /mnt/opt/craftbox-panel
+  rm -f /mnt/opt/craftbox-panel/config.json 2>/dev/null || true
+  ok "painel copiado pra /opt/craftbox-panel"
+else
+  warn "painel nao encontrado no live (/opt/craftbox-panel); a ISO foi montada sem ele?"
+fi
 
 # script de configuracao que roda dentro do chroot
 cat > /mnt/root/chroot-setup.sh <<CHROOT
@@ -378,10 +406,54 @@ if [ -n '$SSHKEY' ]; then
   chown $USERNAME:$USERNAME /home/$USERNAME/.ssh/authorized_keys
 fi
 
-# usuario de servico do minecraft
-useradd -r -m -d /opt/minecraft -s /usr/bin/nologin minecraft || true
-chown -R minecraft:minecraft /opt/minecraft
-chmod +x /opt/minecraft/start.sh /opt/minecraft/backup.sh
+# usuario de servico do minecraft (dono das instancias em /srv/minecraft)
+useradd -r -m -d /srv/minecraft -s /usr/bin/nologin minecraft || true
+chown -R minecraft:minecraft /srv/minecraft
+find /srv/minecraft -name '*.sh' -exec chmod +x {} +
+# lingering: permite que o painel controle integracoes via 'systemctl --user' (playit/cloudflared)
+mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/minecraft
+
+# painel web (craftbox-panel): config + servico
+if [ -d /opt/craftbox-panel ]; then
+  PSECRET=\$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
+  PHASH=\$(node /opt/craftbox-panel/server.js --hash '$PANELPW' | tail -n +2)
+  cat > /opt/craftbox-panel/config.json <<PCFG
+{
+  "port": 8080,
+  "host": "0.0.0.0",
+  "serversDir": "/srv/minecraft",
+  "serviceTemplate": "minecraft@",
+  "activeServer": "$SRVID",
+  "systemctlUser": false,
+  "integrationsDir": "/srv/minecraft/.craftbox-integrations",
+  "auditLog": "/srv/minecraft/.craftbox-audit.log",
+  "rcon": { "host": "127.0.0.1", "port": 25575, "password": "" },
+  "auth": \$PHASH,
+  "sessionSecret": "\$PSECRET"
+}
+PCFG
+  chown -R minecraft:minecraft /opt/craftbox-panel
+  chmod 600 /opt/craftbox-panel/config.json
+  cat > /etc/systemd/system/craftbox-panel.service <<PSVC
+[Unit]
+Description=craftbox-panel (painel web)
+After=network-online.target
+[Service]
+Type=simple
+User=minecraft
+Group=minecraft
+WorkingDirectory=/opt/craftbox-panel
+ExecStart=/usr/bin/node /opt/craftbox-panel/server.js
+Restart=on-failure
+RestartSec=5
+PSVC
+  # sudoers: painel controla os servicos das instancias sem senha
+  cat > /etc/sudoers.d/craftbox-panel <<SUDO
+minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft@*, /usr/bin/systemctl stop minecraft@*, /usr/bin/systemctl restart minecraft@*
+minecraft ALL=(root) NOPASSWD: /usr/bin/tailscale up *, /usr/bin/tailscale down
+SUDO
+  chmod 440 /etc/sudoers.d/craftbox-panel
+fi
 
 # bootloader systemd-boot (UEFI)
 bootctl install
@@ -400,8 +472,11 @@ initrd  /initramfs-linux.img
 options root=PARTUUID=\$ROOT_UUID rw quiet
 ENTRY
 
-# habilita servicos
-systemctl enable NetworkManager sshd systemd-timesyncd minecraft mc-backup.timer
+# habilita servicos (a instancia principal sobe no boot; o painel tambem)
+systemctl enable NetworkManager sshd systemd-timesyncd
+systemctl enable minecraft@$SRVID
+systemctl enable mc-backup@$SRVID.timer
+[ -d /opt/craftbox-panel ] && systemctl enable craftbox-panel || true
 
 # regenera initramfs por garantia
 mkinitcpio -P
@@ -420,9 +495,10 @@ umount -R /mnt || true
 echo
 ok "INSTALACAO CONCLUIDA!"
 echo
-echo "  Ao reiniciar, o servidor Minecraft sobe sozinho na porta 25565."
+echo "  Ao reiniciar, o servidor '$SRVNAME' sobe sozinho na porta 25565,"
+echo "  e o PAINEL WEB fica em:  http://<ip-do-servidor>:8080"
 echo "  Acesse via SSH:  ssh $USERNAME@<ip-do-servidor>"
-echo "  Ver status:      systemctl status minecraft"
+echo "  Status do servidor:  systemctl status minecraft@$SRVID"
 echo
 if yesno "Reiniciar agora? (tire o pendrive quando apagar a tela)" s; then
   reboot
