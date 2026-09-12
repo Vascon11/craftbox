@@ -34,7 +34,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
 async function showApp() { $('#app').hidden = false; await loadServers(); reloadAll(); }
-function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); }
+function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); loadNet(); }
 
 // ---- multi-servidor ----
 async function loadServers() {
@@ -736,6 +736,45 @@ function renderIntegrations(d) {
   }
 }
 $('#intgReload').addEventListener('click', loadIntegrations);
+
+// ---- rede / wi-fi ----
+async function loadNet() {
+  const box = $('#netStatus'), wbox = $('#netWifi'); if (!box) return;
+  const { ok, data } = await api('/api/net');
+  if (!ok) { box.textContent = 'não consegui ler a rede.'; wbox.innerHTML = ''; return; }
+  const parts = [data.ip ? `IP: <code>${esc(data.ip)}</code>` : 'sem IP'];
+  if (data.ssid) parts.push(`Wi-Fi: <b>${esc(data.ssid)}</b>`);
+  parts.push(`internet: ${esc(data.connectivity || '?')}`);
+  box.innerHTML = parts.join(' · ');
+  wbox.innerHTML = '';
+  if (!data.hasWifi) { wbox.innerHTML = '<div class="muted small">Sem placa Wi-Fi detectada (provavelmente cabo). 👍</div>'; return; }
+  const btn = document.createElement('button'); btn.className = 'ghost sm'; btn.textContent = '📶 Procurar redes Wi-Fi';
+  btn.onclick = scanWifi; wbox.append(btn);
+}
+async function scanWifi() {
+  const wbox = $('#netWifi'); wbox.innerHTML = '<div class="muted small" style="padding:.4rem 0">procurando redes…</div>';
+  const { ok, data } = await api('/api/net/scan');
+  if (!ok) { wbox.innerHTML = `<div class="err small">${esc(data.error || 'erro')}</div>`; return; }
+  wbox.innerHTML = '';
+  if (!data.networks || !data.networks.length) { wbox.innerHTML = '<div class="muted small">nenhuma rede encontrada.</div>'; return; }
+  data.networks.forEach(n => {
+    const el = document.createElement('div'); el.className = 'inst-row';
+    const locked = /wpa|wep|802/i.test(n.security);
+    el.innerHTML = `<div class="inst-meta"><div class="inst-title">${esc(n.ssid)} ${locked ? '🔒' : ''}</div><div class="muted small">sinal ${n.signal}% · ${esc(n.security)}</div></div>`;
+    const act = document.createElement('div'); act.className = 'inst-actions';
+    const b = document.createElement('button'); b.className = 'ok sm'; b.textContent = 'Conectar';
+    b.onclick = async () => {
+      let pass = '';
+      if (locked) { pass = await promptDialog(`Senha do Wi-Fi "${n.ssid}":`); if (pass === null) return; }
+      b.disabled = true; b.textContent = 'conectando…';
+      const r = await api('/api/net/wifi', { method: 'POST', body: JSON.stringify({ ssid: n.ssid, password: pass }) });
+      if (r.ok) { toast('Conectado a ' + n.ssid + '.'); loadNet(); }
+      else { b.disabled = false; b.textContent = 'Conectar'; toast(r.data.error || 'falha ao conectar', 'err'); }
+    };
+    act.append(b); el.append(act); wbox.append(el);
+  });
+}
+$('#netReload').addEventListener('click', loadNet);
 
 // ---- auditoria ----
 async function loadAudit() {

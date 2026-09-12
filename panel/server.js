@@ -1034,6 +1034,50 @@ async function integrationStop(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Rede / Wi-Fi (via nmcli) — status, scan e conectar
+// ---------------------------------------------------------------------------
+function nmParse(line) { // nmcli -t escapa ':' como '\:'
+  return line.replace(/\\:/g, ' ').split(':').map(p => p.replace(/ /g, ':'));
+}
+async function netStatus() {
+  const dev = await run('nmcli', ['-t', '-f', 'DEVICE,TYPE,STATE', 'dev']);
+  const hasWifi = /(^|\n)[^:]*:wifi:/.test(dev.stdout || '');
+  const ipr = await run('bash', ['-lc', "ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1"]);
+  const g = await run('nmcli', ['-t', '-f', 'CONNECTIVITY', 'general']);
+  let ssid = null;
+  if (hasWifi) {
+    const w = await run('nmcli', ['-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi']);
+    const line = (w.stdout || '').split('\n').find(l => l.startsWith('yes:'));
+    if (line) ssid = nmParse(line)[1] || null;
+  }
+  return { hasWifi, ip: (ipr.stdout || '').trim() || null, ssid, connectivity: (g.stdout || '').trim() };
+}
+async function wifiScan() {
+  const r = await run('nmcli', ['-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list', '--rescan', 'yes'], { timeout: 30000 });
+  const seen = new Set(), nets = [];
+  (r.stdout || '').split('\n').forEach(l => {
+    if (!l.trim()) return;
+    const p = nmParse(l), ssid = p[0];
+    if (!ssid || seen.has(ssid)) return; seen.add(ssid);
+    nets.push({ ssid, signal: +(p[1] || 0), security: (p[2] || '').trim() || 'aberta' });
+  });
+  nets.sort((a, b) => b.signal - a.signal);
+  return nets;
+}
+async function wifiConnect(ssid, password) {
+  if (!ssid) throw new Error('rede não informada');
+  const args = ['dev', 'wifi', 'connect', ssid];
+  if (password) args.push('password', password);
+  const r = await run('sudo', ['-n', 'nmcli', ...args], { timeout: 45000 });
+  if (r.code !== 0) {
+    const out = r.stderr + r.stdout;
+    if (/a password is required|sudo:/i.test(out)) throw new Error('sem permissão pra usar o nmcli aqui (no craftbox instalado já vem liberado).');
+    throw new Error(out.trim().slice(-200) || 'falha ao conectar no Wi-Fi');
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
 function json(res, code, obj) {
@@ -1322,6 +1366,18 @@ const server = http.createServer((req, res) => {
         const unit = name === 'playit' ? 'craftbox-playit' : name === 'cloudflare' ? 'craftbox-cloudflared' : null;
         if (!unit) return json(res, 400, { error: 'nome inválido' });
         return json(res, 200, { log: await uJournal(unit, 120) });
+      }
+      // --- rede / wi-fi (nmcli) ---
+      if (p === '/api/net' && req.method === 'GET') {
+        try { return json(res, 200, await netStatus()); } catch (e) { return json(res, 500, { error: e.message }); }
+      }
+      if (p === '/api/net/scan' && req.method === 'GET') {
+        try { return json(res, 200, { networks: await wifiScan() }); } catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      if (p === '/api/net/wifi' && req.method === 'POST') {
+        const { ssid, password } = await readBody(req);
+        try { const r = await wifiConnect(ssid, password); audit('wifi-conectar', ssid); return json(res, 200, r); }
+        catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/integrations/cloudflare-token' && req.method === 'POST') {
         const { token } = await readBody(req);

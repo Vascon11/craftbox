@@ -270,9 +270,17 @@
 
       <!-- ============ INTEGRAÇÕES / REDE ============ -->
       <section id="integra" class="panel" hidden>
+        <div class="card" id="netCard">
+          <div class="row spread">
+            <h3>Rede / Wi-Fi</h3>
+            <button id="netReload" class="ghost sm">Atualizar</button>
+          </div>
+          <div id="netStatus" class="muted small" style="margin-top:.6rem">—</div>
+          <div id="netWifi" style="margin-top:.6rem"></div>
+        </div>
         <div class="card">
           <div class="row spread">
-            <h3>Integrações / Rede</h3>
+            <h3>Integrações</h3>
             <button id="intgReload" class="ghost">Atualizar</button>
           </div>
           <p class="muted small" style="margin-top:.6rem">Deixe o servidor acessível pra fora <b>sem mexer no roteador</b>, ou por VPN privada. Cada serviço roda ao lado do painel.</p>

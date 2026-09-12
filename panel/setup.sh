@@ -62,6 +62,7 @@ cat > /etc/sudoers.d/craftbox-panel <<EOF
 minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start $SERVICE, /usr/bin/systemctl stop $SERVICE, /usr/bin/systemctl restart $SERVICE
 minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft@*, /usr/bin/systemctl stop minecraft@*, /usr/bin/systemctl restart minecraft@*
 minecraft ALL=(root) NOPASSWD: /usr/bin/tailscale up *, /usr/bin/tailscale down
+minecraft ALL=(root) NOPASSWD: /usr/bin/nmcli
 EOF
 chmod 440 /etc/sudoers.d/craftbox-panel
 
