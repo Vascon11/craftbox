@@ -12,13 +12,13 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 - [x] **Paginação** na loja de mods/plugins (Anterior/Próxima + total). ✅
 - [x] **Confirmações/avisos visuais** no tema do painel (modais e toasts no lugar dos popups do navegador). ✅
 - [ ] **Gerenciar acesso / usuários**:
-  - [ ] Trocar a senha do painel pela própria interface (hoje só via `node server.js --hash`).
+  - [x] Trocar a senha do painel pela própria interface (aba Configuração → Acesso). ✅
   - [ ] Contas de usuário (email + senha) pra controlar quem acessa o painel.
 - [ ] **Lista de servidores no painel** — uma visão/aba com cards de todas as instâncias (além do seletor no topo).
-- [ ] **Paginação na busca de modpacks** (a da loja de mods já foi; falta a de modpacks).
+- [x] **Paginação na busca de modpacks**. ✅
 - [ ] **Terminal da máquina** no Console — pausado: o classificador de segurança marca como RCE; precisa liberar permissão pra concluir.
 - [ ] **Tema "gaming"** inspirado nas artes de Minecraft dashboard (visual).
-- [ ] **Logo** do craftbox. 🎨
+- [ ] **Logo** do craftbox 🎨 — encaixe pronto no painel (basta soltar `panel/public/logo.png`); arte com um amigo.
 
 ## Appliance real (notebook Dell) — pra funcionar fora do demo
 - [ ] Instalar no sistema o **systemd template** `minecraft@.service` + regra de **sudoers** (`systemctl start/stop/restart minecraft@*`).

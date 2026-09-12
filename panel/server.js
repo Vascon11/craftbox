@@ -705,16 +705,18 @@ async function unzipTo(zip, dest) {
   const r = await run('unzip', ['-o', '-q', zip, '-d', dest], { timeout: 180000 });
   if (r.code !== 0) throw new Error('unzip falhou: ' + (r.stderr || r.stdout).slice(-200));
 }
-async function modpackSearch(query, loaderFilter) {
+async function modpackSearch(query, loaderFilter, offsetArg) {
   const facets = ['["project_type:modpack"]'];
   if (loaderFilter) facets.push(`["categories:${loaderFilter}"]`);
-  const url = `https://api.modrinth.com/v2/search?limit=40&index=relevance&query=${encodeURIComponent(query || '')}&facets=${encodeURIComponent('[' + facets.join(',') + ']')}`;
+  const limit = 24, offset = Math.max(0, parseInt(offsetArg, 10) || 0);
+  const url = `https://api.modrinth.com/v2/search?limit=${limit}&offset=${offset}&index=relevance&query=${encodeURIComponent(query || '')}&facets=${encodeURIComponent('[' + facets.join(',') + ']')}`;
   const data = await httpsJson(url);
-  return (data.hits || []).map(h => ({
+  const results = (data.hits || []).map(h => ({
     slug: h.slug, projectId: h.project_id, title: h.title, author: h.author,
     description: h.description, downloads: h.downloads, follows: h.follows, icon: h.icon_url,
     categories: (h.display_categories || h.categories || []).filter(c => !LOADER_TAGS.has(c)),
   }));
+  return { results, total: data.total_hits || 0, offset, limit };
 }
 async function modpackVersions(slug) {
   const vers = await httpsJson(`https://api.modrinth.com/v2/project/${encodeURIComponent(slug)}/version`);
@@ -1227,7 +1229,7 @@ const server = http.createServer((req, res) => {
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/modpacks/search') {
-        try { return json(res, 200, { results: await modpackSearch(url.searchParams.get('q') || '', url.searchParams.get('loader') || '') }); }
+        try { return json(res, 200, await modpackSearch(url.searchParams.get('q') || '', url.searchParams.get('loader') || '', url.searchParams.get('offset') || '0')); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/modpacks/versions') {
@@ -1289,6 +1291,23 @@ const server = http.createServer((req, res) => {
         return json(res, 200, { ok: true });
       }
 
+      // --- conta / acesso ---
+      if (p === '/api/change-password' && req.method === 'POST') {
+        const { current, newPassword } = await readBody(req);
+        const { salt, hash } = CONFIG.auth;
+        if (!salt || !hash) return json(res, 400, { error: 'senha ainda não configurada' });
+        const calc = crypto.scryptSync(String(current || ''), salt, 64).toString('hex');
+        if (calc.length !== hash.length || !crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(hash))) {
+          audit('senha-troca-falha', 'senha atual incorreta');
+          return json(res, 401, { error: 'senha atual incorreta' });
+        }
+        const np = String(newPassword || '');
+        if (np.length < 4) return json(res, 400, { error: 'a nova senha precisa de pelo menos 4 caracteres' });
+        const h = hashPassword(np);
+        CONFIG.auth = { salt: h.salt, hash: h.hash }; saveConfig();
+        audit('senha-alterada', 'senha do painel trocada');
+        return json(res, 200, { ok: true });
+      }
       // --- auditoria / histórico ---
       if (p === '/api/audit' && req.method === 'DELETE') {
         try { fs.writeFileSync(auditPath(), ''); } catch {}

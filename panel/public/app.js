@@ -206,6 +206,20 @@ $('#cfgSave').addEventListener('click', async () => {
   setTimeout(() => $('#cfgMsg').textContent = '', 4000);
 });
 
+// ---- trocar senha do painel ----
+$('#pwSave').addEventListener('click', async () => {
+  const cur = $('#pwCur').value, np = $('#pwNew').value, np2 = $('#pwNew2').value, msg = $('#pwMsg');
+  if (!cur || !np) { msg.textContent = 'preencha os campos.'; return; }
+  if (np !== np2) { msg.textContent = 'a confirmação não bate.'; return; }
+  if (np.length < 4) { msg.textContent = 'mínimo 4 caracteres.'; return; }
+  $('#pwSave').disabled = true; msg.textContent = 'salvando…';
+  const { ok, data } = await api('/api/change-password', { method: 'POST', body: JSON.stringify({ current: cur, newPassword: np }) });
+  $('#pwSave').disabled = false;
+  if (ok) { msg.textContent = '✓ senha trocada'; $('#pwCur').value = $('#pwNew').value = $('#pwNew2').value = ''; toast('Senha do painel trocada.'); }
+  else { msg.textContent = data.error || 'erro'; }
+  setTimeout(() => msg.textContent = '', 6000);
+});
+
 // ---- console (log ao vivo + comandos RCON, mesma tela) ----
 let logBuf = '';   // log do servidor (atualiza sozinho)
 let cmdBuf = '';   // comandos digitados + respostas (persistem entre refreshes)
@@ -543,15 +557,29 @@ function mpCard(r) {
   };
   return el;
 }
-$('#mpSearchForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
+function renderPagerInto(sel, total, offset, limit, go) {
+  const box = $(sel); if (!box) return; box.innerHTML = '';
+  if (total <= limit) return;
+  const page = Math.floor(offset / limit) + 1, pages = Math.ceil(total / limit);
+  const prev = document.createElement('button'); prev.className = 'ghost sm'; prev.textContent = '◀ Anterior'; prev.disabled = offset <= 0;
+  prev.onclick = () => go(Math.max(0, offset - limit));
+  const info = document.createElement('span'); info.className = 'muted small'; info.textContent = `página ${page} de ${pages} · ${total} resultados`;
+  const next = document.createElement('button'); next.className = 'ghost sm'; next.textContent = 'Próxima ▶'; next.disabled = page >= pages;
+  next.onclick = () => go(offset + limit);
+  box.append(prev, info, next);
+}
+async function doMpSearch(offset) {
+  const off = typeof offset === 'number' ? offset : 0;
   const q = $('#mpSearch').value.trim(), loader = $('#mpLoader').value;
   const box = $('#mpResults'); box.innerHTML = '<div class="muted small" style="padding:1rem">buscando…</div>';
-  const { ok, data } = await api(`/api/modpacks/search?q=${encodeURIComponent(q)}&loader=${encodeURIComponent(loader)}`);
+  const pgr = $('#mpPager'); if (pgr) pgr.innerHTML = '';
+  const { ok, data } = await api(`/api/modpacks/search?q=${encodeURIComponent(q)}&loader=${encodeURIComponent(loader)}&offset=${off}`);
   if (!ok) { box.innerHTML = `<div class="err small" style="padding:1rem">${esc(data.error || 'erro')}</div>`; return; }
-  if (!data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; return; }
+  if (!data.results || !data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; return; }
   box.innerHTML = ''; data.results.forEach(r => box.append(mpCard(r)));
-});
+  renderPagerInto('#mpPager', data.total || 0, data.offset || 0, data.limit || 24, doMpSearch);
+}
+$('#mpSearchForm').addEventListener('submit', (e) => { e.preventDefault(); doMpSearch(0); });
 
 // ---- integrações / rede (playit / tailscale / cloudflare) ----
 function intgPill(on) { return `<span class="status-pill"><span class="dot ${on ? 'on' : 'idle'}"></span>${on ? 'ativo' : 'parado'}</span>`; }

@@ -25,7 +25,10 @@
   <!-- ---- SIDEBAR ---- -->
   <aside class="sidebar">
     <div class="side-brand">
-      <span class="logo">🧱</span>
+      <img class="logo-img" src="/logo.png" alt="craftbox" hidden
+           onload="this.hidden=false;var e=this.parentNode.querySelector('.logo-emoji');if(e)e.hidden=true"
+           onerror="this.remove()">
+      <span class="logo logo-emoji">🧱</span>
       <span>
         <div class="nm">craftbox</div>
         <div class="sub">painel</div>
@@ -153,6 +156,16 @@
 
       <!-- ============ CONFIG ============ -->
       <section id="config" class="panel" hidden>
+        <div class="card">
+          <h3>Acesso ao painel</h3>
+          <p class="muted small" style="margin-top:.6rem">Trocar a senha usada pra entrar no painel.</p>
+          <div class="props">
+            <div class="prop"><label>Senha atual</label><input type="password" id="pwCur" autocomplete="current-password"></div>
+            <div class="prop"><label>Nova senha</label><input type="password" id="pwNew" autocomplete="new-password"></div>
+            <div class="prop"><label>Confirmar nova senha</label><input type="password" id="pwNew2" autocomplete="new-password"></div>
+          </div>
+          <div class="row" style="margin-top:.2rem"><button id="pwSave" class="ok">Trocar senha</button><span id="pwMsg" class="muted small"></span></div>
+        </div>
         <div class="card">
           <div class="row spread">
             <h3>server.properties</h3>
@@ -325,6 +338,7 @@
         </form>
         <p class="muted small" style="margin-top:.5rem">⚠ Cada jogador precisa instalar o <b>mesmo modpack</b> no cliente (Prism Launcher / Modrinth App). Depois de criar, o painel mostra o link do pack pra você compartilhar.</p>
         <div id="mpResults" class="store-grid"></div>
+        <div id="mpPager" class="pager"></div>
       </div>
 
       <h3 style="margin-top:1.2rem">Existentes</h3>

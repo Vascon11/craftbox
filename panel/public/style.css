@@ -309,3 +309,6 @@ button.sm{padding:.4rem .7rem;font-size:.82rem;border-radius:8px}
 .con-tab{background:transparent;border:1px solid transparent;color:var(--muted);padding:.35rem .75rem;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer}
 .con-tab:hover{color:var(--txt)}
 .con-tab.active{color:var(--accent);background:var(--accent-dim);border-color:var(--accent)}
+
+/* logo (imagem opcional; cai pro emoji se não existir /logo.png) */
+.side-brand .logo-img{width:30px;height:30px;object-fit:contain;border-radius:7px;flex:none}
