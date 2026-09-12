@@ -17,18 +17,24 @@ const fmtDur = (s) => { if (s == null) return '—'; const h = Math.floor(s / 36
 async function boot() {
   const { data } = await api('/api/authcheck');
   if (data.authed) showApp();
-  else { $('#login').hidden = false; if (!data.configured) { $('#loginErr').hidden = false; $('#loginErr').textContent = 'Senha ainda não configurada no servidor (node server.js --hash).'; } }
+  else {
+    $('#login').hidden = false;
+    if (data.multiUser) { const lu = $('#loginUser'); lu.hidden = false; lu.required = true; lu.focus(); }
+    if (!data.configured) { $('#loginErr').hidden = false; $('#loginErr').textContent = 'Senha ainda não configurada no servidor (node server.js --hash).'; }
+  }
 }
 $('#loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const { ok, data } = await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('#pw').value }) });
+  const body = { password: $('#pw').value };
+  const lu = $('#loginUser'); if (!lu.hidden) body.user = lu.value.trim();
+  const { ok, data } = await api('/api/login', { method: 'POST', body: JSON.stringify(body) });
   if (ok) { $('#login').hidden = true; showApp(); }
   else { $('#loginErr').hidden = false; $('#loginErr').textContent = data.error || 'Falha no login'; }
 });
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
 async function showApp() { $('#app').hidden = false; await loadServers(); reloadAll(); }
-function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); }
+function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); }
 
 // ---- multi-servidor ----
 async function loadServers() {
@@ -218,6 +224,42 @@ $('#pwSave').addEventListener('click', async () => {
   if (ok) { msg.textContent = '✓ senha trocada'; $('#pwCur').value = $('#pwNew').value = $('#pwNew2').value = ''; toast('Senha do painel trocada.'); }
   else { msg.textContent = data.error || 'erro'; }
   setTimeout(() => msg.textContent = '', 6000);
+});
+
+// ---- usuários do painel ----
+async function loadUsers() {
+  const box = $('#usersList'); if (!box) return;
+  const { ok, data } = await api('/api/users');
+  if (!ok) { box.innerHTML = ''; return; }
+  const form = $('#userAddForm'); if (form) form.style.display = data.isAdmin ? '' : 'none';
+  box.innerHTML = '';
+  if (!data.multiUser) { box.innerHTML = '<div class="muted small">Nenhuma conta ainda — o painel usa senha única. Crie o 1º usuário pra ativar contas.</div>'; return; }
+  data.users.forEach(u => {
+    const el = document.createElement('div'); el.className = 'inst-row';
+    el.innerHTML = `<div class="inst-meta"><div class="inst-title">${esc(u.user)} ${u.role === 'admin' ? '<span class="tag">admin</span>' : ''}${u.user === data.me ? ' <span class="tag">você</span>' : ''}</div></div>`;
+    if (data.isAdmin && u.user !== data.me) {
+      const act = document.createElement('div'); act.className = 'inst-actions';
+      const b = document.createElement('button'); b.className = 'danger sm'; b.textContent = 'Remover';
+      b.onclick = async () => {
+        if (!await confirmDialog('Remover o usuário "' + u.user + '"?', { okText: 'Remover', danger: true })) return;
+        const r = await api('/api/users?user=' + encodeURIComponent(u.user), { method: 'DELETE' });
+        if (!r.ok) return toast(r.data.error || 'erro', 'err');
+        toast('Usuário removido.'); loadUsers();
+      };
+      act.append(b); el.append(act);
+    }
+    box.append(el);
+  });
+}
+$('#userAddForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const user = $('#uAddName').value.trim(), password = $('#uAddPass').value, role = $('#uAddRole').value;
+  if (!user || !password) { $('#usersMsg').textContent = 'preencha usuário e senha.'; return; }
+  const { ok, data } = await api('/api/users', { method: 'POST', body: JSON.stringify({ user, password, role }) });
+  if (!ok) { $('#usersMsg').textContent = data.error || 'erro'; return; }
+  $('#uAddName').value = ''; $('#uAddPass').value = ''; $('#usersMsg').textContent = '';
+  toast(data.firstUser ? 'Contas ativadas — você agora é admin.' : 'Usuário adicionado.');
+  loadUsers();
 });
 
 // ---- console (log ao vivo + comandos RCON, mesma tela) ----
@@ -663,10 +705,10 @@ async function loadAudit() {
   const body = $('#auditBody'); if (!body) return;
   body.innerHTML = '';
   const items = (data && data.items) || [];
-  if (!ok || !items.length) { body.innerHTML = '<tr><td colspan="5" class="muted small">nada registrado ainda.</td></tr>'; return; }
+  if (!ok || !items.length) { body.innerHTML = '<tr><td colspan="6" class="muted small">nada registrado ainda.</td></tr>'; return; }
   items.forEach(it => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="muted small" style="white-space:nowrap">${esc(new Date(it.ts).toLocaleString('pt-BR'))}</td><td><span class="tag">${esc(it.action)}</span></td><td>${esc(it.detail || '')}</td><td class="muted small">${esc(it.server || '-')}</td><td class="muted small">${esc(it.ip || '-')}</td>`;
+    tr.innerHTML = `<td class="muted small" style="white-space:nowrap">${esc(new Date(it.ts).toLocaleString('pt-BR'))}</td><td><span class="tag">${esc(it.action)}</span></td><td>${esc(it.detail || '')}</td><td class="muted small">${esc(it.user || '-')}</td><td class="muted small">${esc(it.server || '-')}</td><td class="muted small">${esc(it.ip || '-')}</td>`;
     body.append(tr);
   });
 }

@@ -11,9 +11,9 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 - [x] **Histórico de ações** (auditoria) dentro do Console: registra login/power/config/mods/integrações/backups com data, servidor e IP; com botão **Limpar**. ✅
 - [x] **Paginação** na loja de mods/plugins (Anterior/Próxima + total). ✅
 - [x] **Confirmações/avisos visuais** no tema do painel (modais e toasts no lugar dos popups do navegador). ✅
-- [ ] **Gerenciar acesso / usuários**:
-  - [x] Trocar a senha do painel pela própria interface (aba Configuração → Acesso). ✅
-  - [ ] Contas de usuário (email + senha) pra controlar quem acessa o painel.
+- [x] **Gerenciar acesso / usuários** (aba Configuração → Acesso): ✅
+  - [x] Trocar a senha do painel pela própria interface.
+  - [x] Contas de usuário (usuário/email + senha, papéis admin/user) — opt-in: sem contas usa senha única; ao criar a 1ª conta o login passa a pedir usuário+senha. Histórico registra quem fez cada ação.
 - [ ] **Lista de servidores no painel** — uma visão/aba com cards de todas as instâncias (além do seletor no topo).
 - [x] **Paginação na busca de modpacks**. ✅
 - [ ] **Terminal da máquina** no Console — pausado: o classificador de segurança marca como RCE; precisa liberar permissão pra concluir.

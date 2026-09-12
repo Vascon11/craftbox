@@ -13,6 +13,7 @@
   <form id="loginForm" class="login-card">
     <div class="brand">🧱 craftbox</div>
     <p class="muted small">Painel do servidor Minecraft</p>
+    <input type="text" id="loginUser" placeholder="Usuário" autocomplete="username" hidden>
     <input type="password" id="pw" placeholder="Senha" autocomplete="current-password" required>
     <button type="submit" class="ok">Entrar</button>
     <div id="loginErr" class="err small" hidden></div>
@@ -166,6 +167,18 @@
           </div>
           <div class="row" style="margin-top:.2rem"><button id="pwSave" class="ok">Trocar senha</button><span id="pwMsg" class="muted small"></span></div>
         </div>
+        <div class="card" id="usersCard">
+          <h3>Usuários do painel</h3>
+          <p class="muted small" style="margin-top:.6rem">Controle quem acessa o painel. Ao criar o <b>1º usuário</b>, o login passa a pedir <b>usuário + senha</b> (e esse 1º vira admin).</p>
+          <div id="usersList" style="margin:.7rem 0"></div>
+          <form id="userAddForm" class="content-toolbar">
+            <input type="text" id="uAddName" placeholder="usuário (ou email)" autocomplete="off">
+            <input type="password" id="uAddPass" placeholder="senha" autocomplete="new-password">
+            <select id="uAddRole"><option value="user">usuário</option><option value="admin">admin</option></select>
+            <button type="submit" class="ok">Adicionar</button>
+          </form>
+          <div id="usersMsg" class="muted small"></div>
+        </div>
         <div class="card">
           <div class="row spread">
             <h3>server.properties</h3>
@@ -271,7 +284,7 @@
               <button id="auditClear" class="danger sm">Limpar</button>
             </div>
             <div style="overflow-x:auto">
-              <table class="tbl"><thead><tr><th>Quando</th><th>Ação</th><th>Detalhe</th><th>Servidor</th><th>IP</th></tr></thead>
+              <table class="tbl"><thead><tr><th>Quando</th><th>Ação</th><th>Detalhe</th><th>Usuário</th><th>Servidor</th><th>IP</th></tr></thead>
                 <tbody id="auditBody"></tbody></table>
             </div>
           </div>

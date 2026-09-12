@@ -35,7 +35,8 @@ const DEFAULT_CONFIG = {
   mcDir: '/opt/minecraft',
   service: 'minecraft',
   rcon: { host: '127.0.0.1', port: 25575, password: '' }, // password vazio = ler do server.properties
-  auth: { salt: '', hash: '' },                            // gere com: node server.js --hash SENHA
+  auth: { salt: '', hash: '' },                            // senha única (modo legado; usado quando 'users' está vazio)
+  users: [],                                               // contas: [{ user, salt, hash, role:'admin'|'user' }]. vazio = modo legado (senha única)
   sessionSecret: '',                                       // gerado automaticamente se vazio
   loader: '',                                              // 'paper'|'fabric' (auto-detecta se vazio)
   mcVersion: '',                                           // ex '1.21.1' (auto-detecta do log se vazio)
@@ -133,7 +134,7 @@ function auditPath() {
 function audit(action, detail) {
   try {
     const st = als.getStore();
-    const entry = { ts: Date.now(), ip: (st && st.ip) || '-', server: (st && st.id) || '-', action, detail: detail == null ? '' : String(detail) };
+    const entry = { ts: Date.now(), ip: (st && st.ip) || '-', user: (st && st.user) || '-', server: (st && st.id) || '-', action, detail: detail == null ? '' : String(detail) };
     const p = auditPath();
     fs.appendFileSync(p, JSON.stringify(entry) + '\n');
     // rotação simples: se passar de ~1MB, mantém as últimas 500 linhas
@@ -158,7 +159,17 @@ function verify(token) {
   if (!exp || Date.now() > exp) return null;
   return value;
 }
-function makeSession() { return sign(`s:${Date.now() + 12 * 3600 * 1000}`); } // 12h
+function makeSession(user) { return sign(`s:${Date.now() + 12 * 3600 * 1000}:${encodeURIComponent(user || 'admin')}`); } // 12h
+// ---- contas de usuário (modo legado = 1 senha; se CONFIG.users tiver itens, vira multiusuário) ----
+function usersList() { return Array.isArray(CONFIG.users) ? CONFIG.users : []; }
+function multiUser() { return usersList().length > 0; }
+function findUser(name) { const n = String(name || '').toLowerCase(); return usersList().find(u => String(u.user || '').toLowerCase() === n); }
+function checkPassword(pw, salt, hash) {
+  if (!salt || !hash) return false;
+  const c = crypto.scryptSync(String(pw || ''), salt, 64).toString('hex');
+  return c.length === hash.length && crypto.timingSafeEqual(Buffer.from(c), Buffer.from(hash));
+}
+function isAdmin(name) { if (!multiUser()) return true; const u = findUser(name); return !!(u && u.role === 'admin'); }
 function parseCookies(req) {
   const out = {};
   (req.headers.cookie || '').split(';').forEach(c => {
@@ -168,6 +179,7 @@ function parseCookies(req) {
   return out;
 }
 function isAuthed(req) { return !!verify(parseCookies(req).cbsession); }
+function sessionUser(req) { const v = verify(parseCookies(req).cbsession); if (!v) return null; return decodeURIComponent(v.split(':')[2] || 'admin'); }
 
 // ---------------------------------------------------------------------------
 // systemctl
@@ -1028,6 +1040,7 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const ctx = serverCtx(currentId(url));
   ctx.ip = ((req.socket && req.socket.remoteAddress) || '-').replace(/^::ffff:/, '');
+  ctx.user = sessionUser(req) || '-';
   als.run(ctx, async () => {
   const p = url.pathname;
 
@@ -1035,20 +1048,26 @@ const server = http.createServer((req, res) => {
     // --- login (nao exige sessao) ---
     if (p === '/api/login' && req.method === 'POST') {
       const body = await readBody(req);
+      const setCookie = (u) => res.setHeader('Set-Cookie', `cbsession=${makeSession(u)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
+      if (multiUser()) {
+        const u = findUser(body.user);
+        if (!u || !checkPassword(body.password, u.salt, u.hash)) { audit('login-falha', `usuário ${body.user || '?'}`); return json(res, 401, { error: 'usuário ou senha incorretos' }); }
+        setCookie(u.user); audit('login', `entrou (${u.user})`); return json(res, 200, { ok: true, user: u.user });
+      }
       const { salt, hash } = CONFIG.auth;
       if (!salt || !hash) return json(res, 500, { error: 'Senha nao configurada. Rode: node server.js --hash SENHA' });
-      const calc = crypto.scryptSync(String(body.password || ''), salt, 64).toString('hex');
-      const ok = calc.length === hash.length && crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(hash));
-      if (!ok) { audit('login-falha', ''); return json(res, 401, { error: 'Senha incorreta' }); }
-      res.setHeader('Set-Cookie', `cbsession=${makeSession()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
-      audit('login', 'entrou no painel');
+      if (!checkPassword(body.password, salt, hash)) { audit('login-falha', ''); return json(res, 401, { error: 'Senha incorreta' }); }
+      setCookie('admin'); audit('login', 'entrou no painel');
       return json(res, 200, { ok: true });
     }
     if (p === '/api/logout' && req.method === 'POST') {
       res.setHeader('Set-Cookie', 'cbsession=; HttpOnly; Path=/; Max-Age=0');
       return json(res, 200, { ok: true });
     }
-    if (p === '/api/authcheck') return json(res, 200, { authed: isAuthed(req), configured: !!(CONFIG.auth.salt && CONFIG.auth.hash) });
+    if (p === '/api/authcheck') {
+      const user = sessionUser(req), authed = isAuthed(req);
+      return json(res, 200, { authed, configured: multiUser() || !!(CONFIG.auth.salt && CONFIG.auth.hash), multiUser: multiUser(), user, isAdmin: authed ? isAdmin(user) : false });
+    }
 
     // --- estaticos + pagina ---
     if (p === '/' ) return serveStatic(res, 'index.html');
@@ -1294,18 +1313,51 @@ const server = http.createServer((req, res) => {
       // --- conta / acesso ---
       if (p === '/api/change-password' && req.method === 'POST') {
         const { current, newPassword } = await readBody(req);
-        const { salt, hash } = CONFIG.auth;
-        if (!salt || !hash) return json(res, 400, { error: 'senha ainda não configurada' });
-        const calc = crypto.scryptSync(String(current || ''), salt, 64).toString('hex');
-        if (calc.length !== hash.length || !crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(hash))) {
-          audit('senha-troca-falha', 'senha atual incorreta');
-          return json(res, 401, { error: 'senha atual incorreta' });
-        }
         const np = String(newPassword || '');
         if (np.length < 4) return json(res, 400, { error: 'a nova senha precisa de pelo menos 4 caracteres' });
-        const h = hashPassword(np);
-        CONFIG.auth = { salt: h.salt, hash: h.hash }; saveConfig();
+        if (multiUser()) {
+          const me = findUser(sessionUser(req));
+          if (!me) return json(res, 401, { error: 'sessão inválida' });
+          if (!checkPassword(current, me.salt, me.hash)) { audit('senha-troca-falha', me.user); return json(res, 401, { error: 'senha atual incorreta' }); }
+          const h = hashPassword(np); me.salt = h.salt; me.hash = h.hash; saveConfig();
+          audit('senha-alterada', me.user); return json(res, 200, { ok: true });
+        }
+        const { salt, hash } = CONFIG.auth;
+        if (!salt || !hash) return json(res, 400, { error: 'senha ainda não configurada' });
+        if (!checkPassword(current, salt, hash)) { audit('senha-troca-falha', 'senha atual incorreta'); return json(res, 401, { error: 'senha atual incorreta' }); }
+        const h = hashPassword(np); CONFIG.auth = { salt: h.salt, hash: h.hash }; saveConfig();
         audit('senha-alterada', 'senha do painel trocada');
+        return json(res, 200, { ok: true });
+      }
+      if (p === '/api/users' && req.method === 'GET') {
+        const me = sessionUser(req);
+        return json(res, 200, { multiUser: multiUser(), me, isAdmin: isAdmin(me), users: usersList().map(u => ({ user: u.user, role: u.role || 'user' })) });
+      }
+      if (p === '/api/users' && req.method === 'POST') {
+        if (!isAdmin(sessionUser(req))) return json(res, 403, { error: 'só um admin pode gerenciar usuários' });
+        const { user, password, role } = await readBody(req);
+        const name = String(user || '').trim();
+        if (!/^[\w.@+-]{2,32}$/.test(name)) return json(res, 400, { error: 'usuário inválido (2-32 caracteres: letras, números, . _ @ + -)' });
+        if (String(password || '').length < 4) return json(res, 400, { error: 'senha mínima de 4 caracteres' });
+        if (findUser(name)) return json(res, 409, { error: 'usuário já existe' });
+        if (!Array.isArray(CONFIG.users)) CONFIG.users = [];
+        const firstUser = CONFIG.users.length === 0;
+        const h = hashPassword(String(password));
+        CONFIG.users.push({ user: name, salt: h.salt, hash: h.hash, role: firstUser ? 'admin' : (role === 'admin' ? 'admin' : 'user') });
+        saveConfig();
+        // ao criar o 1º usuário, migra a sessão atual pra ele (pra não trancar o acesso)
+        if (firstUser) res.setHeader('Set-Cookie', `cbsession=${makeSession(name)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
+        audit('usuario-criar', name + (firstUser ? ' (admin, 1º usuário)' : ''));
+        return json(res, 200, { ok: true, firstUser });
+      }
+      if (p === '/api/users' && req.method === 'DELETE') {
+        if (!isAdmin(sessionUser(req))) return json(res, 403, { error: 'só um admin pode gerenciar usuários' });
+        const name = url.searchParams.get('user') || '';
+        const u = findUser(name);
+        if (!u) return json(res, 404, { error: 'usuário não existe' });
+        if (u.role === 'admin' && usersList().filter(x => x.role === 'admin').length <= 1) return json(res, 400, { error: 'não dá pra remover o último admin' });
+        CONFIG.users = usersList().filter(x => x !== u); saveConfig();
+        audit('usuario-remover', name);
         return json(res, 200, { ok: true });
       }
       // --- auditoria / histórico ---
