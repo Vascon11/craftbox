@@ -16,6 +16,7 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
   - [x] Contas de usuário (usuário/email + senha, papéis admin/user) — opt-in: sem contas usa senha única; ao criar a 1ª conta o login passa a pedir usuário+senha. Histórico registra quem fez cada ação.
 - [x] **Lista de servidores no painel** — aba "Servidores" com cards (status + Ligar/Desligar/Selecionar). ✅
 - [x] **Paginação na busca de modpacks**. ✅
+- [x] **Login de jogadores (pirata + premium)** em Compatibilidade — offline + plugin de auth (EasyAuth/Fabric, AuthMeReloaded/Paper): pirata usa `/register` `/login`, premium entra por autologin. Bloqueia se não houver versão compatível. ✅
 - [ ] **Terminal da máquina** no Console — pausado: o classificador de segurança marca como RCE; precisa liberar permissão pra concluir.
 - [ ] **Tema "gaming"** inspirado nas artes de Minecraft dashboard (visual).
 - [ ] **Logo** do craftbox 🎨 — encaixe pronto no painel (basta soltar `panel/public/logo.png`); arte com um amigo.

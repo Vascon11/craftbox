@@ -576,6 +576,16 @@ $('#bedrockBtn').addEventListener('click', async () => {
   msg.textContent = ok ? `✓ instalado: ${data.installed.join(', ')} — reinicie o servidor.` : ('erro: ' + (data.error || ''));
   btn.disabled = false; loadInstalled();
 });
+$('#authBtn').addEventListener('click', async () => {
+  const btn = $('#authBtn'), msg = $('#authMsg');
+  btn.disabled = true; msg.textContent = 'instalando o plugin de login…';
+  const { ok, data } = await api('/api/compat/auth', { method: 'POST' });
+  msg.textContent = ok
+    ? `✓ login ativado (${data.installed.join(', ')}), servidor em offline — reinicie. Pirata: /register e /login. Premium: autologin.`
+    : ('erro: ' + (data.error || ''));
+  btn.disabled = false; loadInstalled();
+  if (ok) $('#offlineToggle') && ($('#offlineToggle').checked = true);
+});
 
 // ---- bindings multi-servidor ----
 $('#serverSelect').addEventListener('change', (e) => switchServer(e.target.value));

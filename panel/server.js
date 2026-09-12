@@ -571,6 +571,31 @@ async function installBedrock() {
   }
   return { loader, folder, installed };
 }
+// Login de jogadores: offline mode + plugin de auth (pirata usa /register /login; premium = autologin)
+async function ghLatestAsset(repo, match) {
+  const rel = await httpsJson(`https://api.github.com/repos/${repo}/releases/latest`);
+  const a = (rel.assets || []).find(x => match.test(x.name));
+  if (!a) throw new Error('não achei o .jar na release de ' + repo);
+  return { url: a.browser_download_url, name: a.name };
+}
+async function installPlayerAuth() {
+  const loader = detectLoader();
+  const folder = contentFolder(loader);
+  const mc = detectMcVersion();
+  const installed = [];
+  if (loader === 'fabric') {
+    const vers = await modrinthVersions('easyauth', loader, mc);
+    const v = pickVersion(vers, null, mc);
+    if (!v || !v.compatible) throw new Error(`o EasyAuth ainda não tem versão pra MC ${mc || '?'}. Use um servidor 1.20/1.21 pra esse recurso.`);
+    await download(v.url, path.join(folder, v.filename)); installed.push(v.filename);
+    try { const fa = await modrinthResolve('fabric-api', 'fabric', mc); await download(fa.url, path.join(folder, fa.filename)); installed.push(fa.filename); } catch {}
+  } else {
+    const a = await ghLatestAsset('AuthMe/AuthMeReloaded', /^AuthMe.*\.jar$/i);
+    await download(a.url, path.join(folder, 'AuthMeReloaded.jar')); installed.push('AuthMeReloaded.jar');
+  }
+  writeProps({ 'online-mode': 'false' });
+  return { loader, offline: true, installed };
+}
 
 // ---------------------------------------------------------------------------
 // Multi-servidor: criar / clonar / apagar instancias
@@ -1224,6 +1249,10 @@ const server = http.createServer((req, res) => {
       }
       if (p === '/api/compat/bedrock' && req.method === 'POST') {
         try { const r = await installBedrock(); audit('bedrock', `Geyser/Floodgate → ${SRV().name}`); return json(res, 200, { ok: true, ...r }); }
+        catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      if (p === '/api/compat/auth' && req.method === 'POST') {
+        try { const r = await installPlayerAuth(); audit('login-jogadores', `${r.installed.join(', ')} → ${SRV().name}`); return json(res, 200, { ok: true, ...r }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       // --- multi-servidor ---
