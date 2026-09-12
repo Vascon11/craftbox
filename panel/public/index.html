@@ -188,6 +188,7 @@
           </form>
           <div id="catChips" class="chips"></div>
           <div id="searchResults" class="store-grid"></div>
+          <div id="searchPager" class="pager"></div>
         </div>
         <div class="card">
           <div class="row spread">
@@ -230,19 +231,37 @@
         </div>
       </section>
 
-      <!-- ============ CONSOLE (log ao vivo + comandos) ============ -->
+      <!-- ============ CONSOLE (servidor + auditoria) ============ -->
       <section id="console" class="panel" hidden>
         <div class="card">
           <div class="row spread">
-            <h3>Console</h3>
-            <label class="muted small"><input type="checkbox" id="autolog" checked style="vertical-align:middle"> log ao vivo</label>
+            <div class="con-tabs">
+              <button type="button" class="con-tab active" data-con="mc">Servidor (Minecraft)</button>
+              <button type="button" class="con-tab" data-con="audit">Histórico</button>
+            </div>
+            <label class="muted small" id="autologWrap"><input type="checkbox" id="autolog" checked style="vertical-align:middle"> log ao vivo</label>
           </div>
-          <p class="muted small" style="margin-top:.6rem">Log do servidor em tempo real. Digite embaixo pra mandar comandos via <b>RCON</b> (sem a barra <code>/</code>). Ex.: <code>list</code>, <code>say olá</code>, <code>op fulano</code>, <code>weather clear</code>.</p>
-          <pre id="consoleOut" class="term tall"></pre>
-          <form id="rconForm" class="row">
-            <input type="text" id="rconIn" placeholder="comando (ex: list, say olá, time set day)" autocomplete="off">
-            <button type="submit" class="ok">Enviar</button>
-          </form>
+
+          <div data-con-panel="mc">
+            <p class="muted small" style="margin-top:.6rem">Log do servidor em tempo real. Digite embaixo pra mandar comandos via <b>RCON</b> (sem a barra <code>/</code>). Ex.: <code>list</code>, <code>say olá</code>, <code>op fulano</code>, <code>weather clear</code>.</p>
+            <pre id="consoleOut" class="term tall"></pre>
+            <form id="rconForm" class="row">
+              <input type="text" id="rconIn" placeholder="comando (ex: list, say olá, time set day)" autocomplete="off">
+              <button type="submit" class="ok">Enviar</button>
+            </form>
+          </div>
+
+          <div data-con-panel="audit" hidden>
+            <div class="row spread" style="margin-top:.6rem">
+              <p class="muted small" style="margin:0;flex:1">Tudo o que foi feito pelo painel — ligar/desligar, configuração, mods, integrações, backups e logins — com data, servidor e IP de origem.</p>
+              <button id="auditReload" class="ghost sm">Atualizar</button>
+              <button id="auditClear" class="danger sm">Limpar</button>
+            </div>
+            <div style="overflow-x:auto">
+              <table class="tbl"><thead><tr><th>Quando</th><th>Ação</th><th>Detalhe</th><th>Servidor</th><th>IP</th></tr></thead>
+                <tbody id="auditBody"></tbody></table>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -258,6 +277,7 @@
             <tbody id="bkBody"></tbody></table>
         </div>
       </section>
+
     </main>
   </div>
 

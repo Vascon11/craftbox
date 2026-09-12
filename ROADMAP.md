@@ -7,11 +7,17 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 - [x] **Página "Integrações / Rede"** — cards com status ao vivo + instalar/ligar, rodando como serviços `systemctl --user` (rootless): ✅
   - [x] **playit.gg** — servidor público sem abrir porta no roteador (túnel TCP); instala o binário + secret key do playit.gg.
   - [x] **Cloudflare Tunnel** — instala o `cloudflared` + token do túnel (ótimo pro painel via domínio).
-  - [x] **Tailscale** — detecta, mostra IP/status e conecta/desconecta (VPN privada entre amigos).
+  - [x] **Tailscale** — detecta, mostra IP/status e conecta/desconecta (VPN privada entre amigos). Controle rootless via `sudo -n` + provisão no `setup.sh`.
+- [x] **Histórico de ações** (auditoria) dentro do Console: registra login/power/config/mods/integrações/backups com data, servidor e IP; com botão **Limpar**. ✅
+- [x] **Paginação** na loja de mods/plugins (Anterior/Próxima + total). ✅
+- [x] **Confirmações/avisos visuais** no tema do painel (modais e toasts no lugar dos popups do navegador). ✅
 - [ ] **Gerenciar acesso / usuários**:
   - [ ] Trocar a senha do painel pela própria interface (hoje só via `node server.js --hash`).
   - [ ] Contas de usuário (email + senha) pra controlar quem acessa o painel.
 - [ ] **Lista de servidores no painel** — uma visão/aba com cards de todas as instâncias (além do seletor no topo).
+- [ ] **Paginação na busca de modpacks** (a da loja de mods já foi; falta a de modpacks).
+- [ ] **Terminal da máquina** no Console — pausado: o classificador de segurança marca como RCE; precisa liberar permissão pra concluir.
+- [ ] **Tema "gaming"** inspirado nas artes de Minecraft dashboard (visual).
 - [ ] **Logo** do craftbox. 🎨
 
 ## Appliance real (notebook Dell) — pra funcionar fora do demo

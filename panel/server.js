@@ -123,6 +123,25 @@ function currentId(url) {
 function SRV() { return als.getStore() || serverCtx(currentId(null)); }
 
 // ---------------------------------------------------------------------------
+// Auditoria: registra as ações feitas pelo painel (append em arquivo)
+// ---------------------------------------------------------------------------
+function auditPath() {
+  if (CONFIG.auditLog) return CONFIG.auditLog;
+  const base = CONFIG.serversDir ? path.dirname(CONFIG.serversDir) : os.homedir();
+  return path.join(base, 'craftbox-audit.log');
+}
+function audit(action, detail) {
+  try {
+    const st = als.getStore();
+    const entry = { ts: Date.now(), ip: (st && st.ip) || '-', server: (st && st.id) || '-', action, detail: detail == null ? '' : String(detail) };
+    const p = auditPath();
+    fs.appendFileSync(p, JSON.stringify(entry) + '\n');
+    // rotação simples: se passar de ~1MB, mantém as últimas 500 linhas
+    try { if (fs.statSync(p).size > 1048576) { const keep = fs.readFileSync(p, 'utf8').trim().split('\n').slice(-500); fs.writeFileSync(p, keep.join('\n') + '\n'); } } catch {}
+  } catch {}
+}
+
+// ---------------------------------------------------------------------------
 // Sessao (cookie assinado, sem dependencia)
 // ---------------------------------------------------------------------------
 function sign(value) {
@@ -375,14 +394,17 @@ async function modrinthSearch(query, loader, version, opts = {}) {
   if (version) facets.push(`["versions:${version}"]`);
   if (opts.category) facets.push(`["categories:${opts.category}"]`);
   const index = SORTS.includes(opts.sort) ? opts.sort : 'relevance';
-  const url = `https://api.modrinth.com/v2/search?limit=40&index=${index}&query=${encodeURIComponent(query || '')}&facets=${encodeURIComponent('[' + facets.join(',') + ']')}`;
+  const limit = 24;
+  const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
+  const url = `https://api.modrinth.com/v2/search?limit=${limit}&offset=${offset}&index=${index}&query=${encodeURIComponent(query || '')}&facets=${encodeURIComponent('[' + facets.join(',') + ']')}`;
   const data = await httpsJson(url);
-  return (data.hits || []).map(h => ({
+  const results = (data.hits || []).map(h => ({
     slug: h.slug, projectId: h.project_id, title: h.title, author: h.author,
     description: h.description, downloads: h.downloads, follows: h.follows,
     icon: h.icon_url, type: h.project_type,
     categories: (h.display_categories || h.categories || []).filter(c => !LOADER_TAGS.has(c)),
   }));
+  return { results, total: data.total_hits || 0, offset, limit };
 }
 // lista todas as versoes compativeis com o loader; marca .compatible pra versao do MC
 async function modrinthVersions(slug, loader, mcVersion) {
@@ -866,6 +888,19 @@ async function uJournal(unit, lines) { const r = await run('journalctl', ['--use
 const IARCH = os.arch() === 'arm64' ? 'aarch64' : 'amd64';
 const PLAYIT_URL = `https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-${IARCH}`;
 const CLOUDFLARED_URL = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${os.arch() === 'arm64' ? 'arm64' : 'amd64'}`;
+// controla o tailscale: tenta direto (usuario operador) e cai pra 'sudo -n' (sudoers do appliance)
+async function tsCtl(args) {
+  const r = await run('tailscale', args, { timeout: 20000 });
+  if (r.code === 0) return r;
+  const s = await run('sudo', ['-n', 'tailscale', ...args], { timeout: 20000 });
+  if (s.code === 0 || (s.stdout + s.stderr).includes('login.tailscale.com')) return s;
+  return r; // mantem o erro original (com a dica de operador)
+}
+function tsPermMsg(out) {
+  if (/operator|access denied|prefs write|a password is required|sudo:/i.test(out || ''))
+    return 'Sem permissão pra controlar o Tailscale por aqui. No craftbox instalado isso já vem liberado; neste desktop, rode UMA vez: sudo tailscale set --operator=$USER';
+  return null;
+}
 
 async function integrationsStatus() {
   const dir = integrationsDir();
@@ -937,16 +972,22 @@ async function integrationStart(name) {
     return { ok: true };
   }
   if (name === 'tailscale') {
-    const r = await run('tailscale', ['up', '--accept-routes'], { timeout: 20000 });
-    const url = (r.stdout + r.stderr).match(/https:\/\/login\.tailscale\.com\/\S+/);
+    const r = await tsCtl(['up', '--accept-routes']);
+    const out = r.stdout + r.stderr;
+    const url = out.match(/https:\/\/login\.tailscale\.com\/\S+/);
     if (url) return { ok: true, loginUrl: url[0] };
     if (r.code === 0) return { ok: true };
-    throw new Error((r.stderr || r.stdout || 'falha').slice(-200) + ' (Tailscale normalmente precisa de root: "sudo tailscale up")');
+    throw new Error(tsPermMsg(out) || (r.stderr || r.stdout || 'falha').slice(-200));
   }
   throw new Error('integração desconhecida');
 }
 async function integrationStop(name) {
-  if (name === 'tailscale') { const r = await run('tailscale', ['down']); return { ok: r.code === 0 }; }
+  if (name === 'tailscale') {
+    const r = await tsCtl(['down']);
+    if (r.code === 0) return { ok: true };
+    const out = r.stderr + r.stdout;
+    throw new Error(tsPermMsg(out) || out.slice(-200) || 'falha ao desconectar');
+  }
   const unit = name === 'playit' ? 'craftbox-playit' : name === 'cloudflare' ? 'craftbox-cloudflared' : null;
   if (!unit) throw new Error('integração desconhecida');
   await uSvc('stop', unit);
@@ -983,7 +1024,9 @@ function serveStatic(res, file) {
 // ---------------------------------------------------------------------------
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  als.run(serverCtx(currentId(url)), async () => {
+  const ctx = serverCtx(currentId(url));
+  ctx.ip = ((req.socket && req.socket.remoteAddress) || '-').replace(/^::ffff:/, '');
+  als.run(ctx, async () => {
   const p = url.pathname;
 
   try {
@@ -994,8 +1037,9 @@ const server = http.createServer((req, res) => {
       if (!salt || !hash) return json(res, 500, { error: 'Senha nao configurada. Rode: node server.js --hash SENHA' });
       const calc = crypto.scryptSync(String(body.password || ''), salt, 64).toString('hex');
       const ok = calc.length === hash.length && crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(hash));
-      if (!ok) return json(res, 401, { error: 'Senha incorreta' });
+      if (!ok) { audit('login-falha', ''); return json(res, 401, { error: 'Senha incorreta' }); }
       res.setHeader('Set-Cookie', `cbsession=${makeSession()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
+      audit('login', 'entrou no painel');
       return json(res, 200, { ok: true });
     }
     if (p === '/api/logout' && req.method === 'POST') {
@@ -1028,6 +1072,7 @@ const server = http.createServer((req, res) => {
       if (p === '/api/power' && req.method === 'POST') {
         const { action } = await readBody(req);
         const r = await svcAction(action);
+        audit('power', `${action} → ${SRV().name}`);
         return json(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, output: r.stderr || r.stdout });
       }
       if (p === '/api/properties' && req.method === 'GET') return json(res, 200, { properties: readProps() });
@@ -1035,6 +1080,7 @@ const server = http.createServer((req, res) => {
         const body = await readBody(req);
         if (!body || typeof body !== 'object') return json(res, 400, { error: 'payload invalido' });
         writeProps(body); // valores como strings
+        audit('config', `server.properties (${Object.keys(body).length} campos) → ${SRV().name}`);
         return json(res, 200, { ok: true, properties: readProps() });
       }
       if (p === '/api/rcon' && req.method === 'POST') {
@@ -1068,6 +1114,7 @@ const server = http.createServer((req, res) => {
       }
       if (p === '/api/backups' && req.method === 'POST') {
         const r = await run('bash', [path.join(SRV().dir, 'backup.sh')], { timeout: 120000 });
+        audit('backup', `manual → ${SRV().name}`);
         return json(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, output: r.stderr || r.stdout || 'backup executado' });
       }
       // --- conteudo (mods/plugins via Modrinth) ---
@@ -1078,8 +1125,8 @@ const server = http.createServer((req, res) => {
       if (p === '/api/content/search') {
         try {
           const q = url.searchParams.get('q') || '';
-          const opts = { sort: url.searchParams.get('sort') || 'relevance', category: url.searchParams.get('category') || '' };
-          return json(res, 200, { results: await modrinthSearch(q, detectLoader(), detectMcVersion(), opts) });
+          const opts = { sort: url.searchParams.get('sort') || 'relevance', category: url.searchParams.get('category') || '', offset: url.searchParams.get('offset') || '0' };
+          return json(res, 200, await modrinthSearch(q, detectLoader(), detectMcVersion(), opts));
         } catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/content/project') {
@@ -1102,6 +1149,7 @@ const server = http.createServer((req, res) => {
         if (!slug) return json(res, 400, { error: 'slug vazio' });
         try {
           const installed = await installProject(slug, detectLoader(), detectMcVersion(), versionId || null);
+          audit('mod-install', `${slug} → ${SRV().name}`);
           return json(res, 200, { ok: true, installed });
         } catch (e) { return json(res, 502, { error: e.message }); }
       }
@@ -1117,6 +1165,7 @@ const server = http.createServer((req, res) => {
           const man = readManifest();
           for (const s of Object.keys(man)) if (man[s].filename === base) { man[s].disabled = !enabled; }
           writeManifest(man);
+          audit('mod-toggle', `${base} ${enabled ? 'ativado' : 'desativado'} → ${SRV().name}`);
           return json(res, 200, { ok: true });
         } catch (e) { return json(res, 500, { error: e.message }); }
       }
@@ -1130,6 +1179,7 @@ const server = http.createServer((req, res) => {
         try {
           const folder = contentFolder(detectLoader());
           const man = readManifest();
+          audit('mod-remove', `${slug || file} → ${SRV().name}`);
           if (slug) {
             const m = man[slug];
             if (m && m.filename) { try { fs.unlinkSync(path.join(folder, m.filename)); } catch {} try { fs.unlinkSync(path.join(folder, m.filename + '.disabled')); } catch {} }
@@ -1148,10 +1198,11 @@ const server = http.createServer((req, res) => {
       if (p === '/api/compat/offline' && req.method === 'POST') {
         const { enabled } = await readBody(req);
         writeProps({ 'online-mode': enabled ? 'false' : 'true' });
+        audit('modo-offline', `${enabled ? 'ATIVADO' : 'desativado'} → ${SRV().name}`);
         return json(res, 200, { ok: true, onlineMode: !enabled });
       }
       if (p === '/api/compat/bedrock' && req.method === 'POST') {
-        try { return json(res, 200, { ok: true, ...(await installBedrock()) }); }
+        try { const r = await installBedrock(); audit('bedrock', `Geyser/Floodgate → ${SRV().name}`); return json(res, 200, { ok: true, ...r }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       // --- multi-servidor ---
@@ -1161,17 +1212,18 @@ const server = http.createServer((req, res) => {
         if (!multiEnabled()) return json(res, 400, { error: 'multi-servidor desativado' });
         if (!listInstanceIds().includes(id)) return json(res, 404, { error: 'servidor não existe' });
         CONFIG.activeServer = id; saveConfig();
+        audit('servidor-selecionar', id);
         return json(res, 200, { ok: true, activeId: id });
       }
       if (p === '/api/servers/create' && req.method === 'POST') {
         const b = await readBody(req);
         if (!b.name || !String(b.name).trim()) return json(res, 400, { error: 'dê um nome ao servidor' });
-        try { return json(res, 200, { ok: true, server: await createInstance({ name: b.name, loader: b.loader, version: b.version }) }); }
+        try { const s = await createInstance({ name: b.name, loader: b.loader, version: b.version }); audit('servidor-criar', `${s.name} (${s.loader} ${s.mcVersion || ''})`); return json(res, 200, { ok: true, server: s }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/servers/clone' && req.method === 'POST') {
         const b = await readBody(req);
-        try { return json(res, 200, { ok: true, server: await cloneInstance(b.id, b.name) }); }
+        try { const s = await cloneInstance(b.id, b.name); audit('servidor-clonar', `${b.id} → ${s.name}`); return json(res, 200, { ok: true, server: s }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/modpacks/search') {
@@ -1187,12 +1239,12 @@ const server = http.createServer((req, res) => {
       if (p === '/api/servers/create-modpack' && req.method === 'POST') {
         const b = await readBody(req);
         if (!b.slug) return json(res, 400, { error: 'modpack não informado' });
-        try { return json(res, 200, { ok: true, server: await createFromModpack({ name: b.name, slug: b.slug, versionId: b.versionId }) }); }
+        try { const s = await createFromModpack({ name: b.name, slug: b.slug, versionId: b.versionId }); audit('servidor-modpack', `${s.name} (${b.slug})`); return json(res, 200, { ok: true, server: s }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/servers' && req.method === 'DELETE') {
         const id = url.searchParams.get('id') || '';
-        try { return json(res, 200, await deleteInstance(id)); }
+        try { const r = await deleteInstance(id); audit('servidor-apagar', id); return json(res, 200, r); }
         catch (e) { return json(res, 500, { error: e.message }); }
       }
       // --- integracoes (playit / tailscale / cloudflare) ---
@@ -1202,17 +1254,17 @@ const server = http.createServer((req, res) => {
       }
       if (p === '/api/integrations/install' && req.method === 'POST') {
         const { name } = await readBody(req);
-        try { return json(res, 200, await integrationInstall(name)); }
+        try { const r = await integrationInstall(name); audit('integração-instalar', name); return json(res, 200, r); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/integrations/start' && req.method === 'POST') {
         const { name } = await readBody(req);
-        try { return json(res, 200, await integrationStart(name)); }
+        try { const r = await integrationStart(name); audit('integração-ligar', name); return json(res, 200, r); }
         catch (e) { return json(res, 500, { error: e.message }); }
       }
       if (p === '/api/integrations/stop' && req.method === 'POST') {
         const { name } = await readBody(req);
-        try { return json(res, 200, await integrationStop(name)); }
+        try { const r = await integrationStop(name); audit('integração-desligar', name); return json(res, 200, r); }
         catch (e) { return json(res, 500, { error: e.message }); }
       }
       if (p === '/api/integrations/log' && req.method === 'GET') {
@@ -1235,6 +1287,22 @@ const server = http.createServer((req, res) => {
         const f = path.join(integrationsDir(), 'playit.toml');
         fs.writeFileSync(f, `secret_key = "${s}"\n`); try { fs.chmodSync(f, 0o600); } catch {}
         return json(res, 200, { ok: true });
+      }
+
+      // --- auditoria / histórico ---
+      if (p === '/api/audit' && req.method === 'DELETE') {
+        try { fs.writeFileSync(auditPath(), ''); } catch {}
+        audit('historico-limpo', 'histórico apagado pelo painel');
+        return json(res, 200, { ok: true });
+      }
+      if (p === '/api/audit' && req.method === 'GET') {
+        const n = Math.min(2000, parseInt(url.searchParams.get('lines') || '300', 10));
+        let items = [];
+        try {
+          items = fs.readFileSync(auditPath(), 'utf8').trim().split('\n').slice(-n).reverse()
+            .map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        } catch {}
+        return json(res, 200, { items });
       }
 
       return json(res, 404, { error: 'endpoint desconhecido' });

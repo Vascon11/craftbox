@@ -28,7 +28,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
 async function showApp() { $('#app').hidden = false; await loadServers(); reloadAll(); }
-function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); }
+function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); }
 
 // ---- multi-servidor ----
 async function loadServers() {
@@ -68,15 +68,15 @@ async function renderServerManager() {
     const cp = el.querySelector('.btn-copy');
     if (cp) cp.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(cp.dataset.url); toast('Link do pack copiado — manda pros jogadores.'); };
     el.querySelector('.btn-clone').onclick = async () => {
-      const nome = prompt('Nome da cópia:', s.name + ' (cópia)'); if (!nome) return;
+      const nome = await promptDialog('Nome da cópia:', s.name + ' (cópia)'); if (!nome) return;
       const r = await api('/api/servers/clone', { method: 'POST', body: JSON.stringify({ id: s.id, name: nome }) });
-      if (!r.ok) return alert(r.data.error || 'falha ao clonar');
+      if (!r.ok) return toast(r.data.error || 'falha ao clonar', 'err');
       toast('Servidor clonado.'); await loadServers(); renderServerManager();
     };
     el.querySelector('.btn-del').onclick = async () => {
-      if (!confirm(`Apagar o servidor "${s.name}"? Isso remove o mundo e tudo dele. Não dá pra desfazer.`)) return;
+      if (!await confirmDialog(`Apagar o servidor "${s.name}"? Isso remove o mundo e tudo dele. Não dá pra desfazer.`, { okText: 'Apagar', danger: true })) return;
       const r = await api('/api/servers?id=' + encodeURIComponent(s.id), { method: 'DELETE' });
-      if (!r.ok) return alert(r.data.error || 'falha ao apagar');
+      if (!r.ok) return toast(r.data.error || 'falha ao apagar', 'err');
       toast('Servidor apagado.'); await loadServers(); reloadAll(); renderServerManager();
     };
     box.append(el);
@@ -147,7 +147,7 @@ async function power(action, btn) {
 }
 $('#btnStart').addEventListener('click', () => power('start'));
 $('#btnRestart').addEventListener('click', () => power('restart'));
-$('#btnStop').addEventListener('click', () => { if (confirm('Desligar o servidor? Jogadores serão desconectados.')) power('stop'); });
+$('#btnStop').addEventListener('click', async () => { if (await confirmDialog('Desligar o servidor? Jogadores serão desconectados.', { okText: 'Desligar', danger: true })) power('stop'); });
 
 // ---- config (server.properties) ----
 const COMMON = [
@@ -270,9 +270,45 @@ function iconHtml(url, title) {
   if (url) return `<img class="c-icon" src="${esc(url)}" alt="" loading="lazy">`;
   return `<div class="c-icon ph">${esc((title || '?').trim().charAt(0).toUpperCase())}</div>`;
 }
-function toast(msg) {
+function toast(msg, type) {
   let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.append(t); }
-  t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 5000);
+  t.textContent = msg; t.className = 'show' + (type === 'err' ? ' err' : ''); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 5000);
+}
+// modal de confirmação no tema do painel (substitui o confirm() do navegador)
+function confirmDialog(message, opts = {}) {
+  return new Promise((resolve) => {
+    const ov = document.createElement('div'); ov.className = 'modal';
+    ov.innerHTML = `<div class="modal-card confirm-card"><div class="confirm-msg"></div>
+      <div class="confirm-actions"><button class="ghost" data-x="0"></button><button data-x="1"></button></div></div>`;
+    ov.querySelector('.confirm-msg').textContent = message;
+    ov.querySelector('[data-x="0"]').textContent = opts.cancelText || 'Cancelar';
+    const okb = ov.querySelector('[data-x="1"]'); okb.textContent = opts.okText || 'Confirmar'; okb.className = opts.danger ? 'danger' : 'ok';
+    document.body.append(ov);
+    const done = (v) => { ov.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') done(false); if (e.key === 'Enter') done(true); };
+    document.addEventListener('keydown', onKey);
+    ov.addEventListener('click', (e) => { if (e.target === ov) done(false); });
+    ov.querySelector('[data-x="0"]').onclick = () => done(false);
+    okb.onclick = () => done(true); okb.focus();
+  });
+}
+// modal de input (substitui o prompt() do navegador)
+function promptDialog(message, def = '') {
+  return new Promise((resolve) => {
+    const ov = document.createElement('div'); ov.className = 'modal';
+    ov.innerHTML = `<div class="modal-card confirm-card"><div class="confirm-msg"></div>
+      <input class="pd-in" style="width:100%;margin:.9rem 0">
+      <div class="confirm-actions"><button class="ghost" data-x="0">Cancelar</button><button class="ok" data-x="1">OK</button></div></div>`;
+    ov.querySelector('.confirm-msg').textContent = message;
+    const inp = ov.querySelector('.pd-in'); inp.value = def;
+    document.body.append(ov);
+    const done = (v) => { ov.remove(); resolve(v); };
+    ov.addEventListener('click', (e) => { if (e.target === ov) done(null); });
+    ov.querySelector('[data-x="0"]').onclick = () => done(null);
+    ov.querySelector('[data-x="1"]').onclick = () => done(inp.value);
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value); if (e.key === 'Escape') done(null); });
+    inp.focus(); inp.select();
+  });
 }
 
 async function loadContentInfo() {
@@ -294,14 +330,28 @@ function renderChips() {
   });
 }
 
-async function doSearch() {
+async function doSearch(offset) {
+  const off = typeof offset === 'number' ? offset : 0;
   const q = $('#searchIn').value.trim(), sort = $('#sortSelect').value;
   const box = $('#searchResults'); box.innerHTML = '<div class="muted small" style="padding:1rem">buscando…</div>';
-  const qs = `q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}&category=${encodeURIComponent(activeCat)}`;
+  const pgr = $('#searchPager'); if (pgr) pgr.innerHTML = '';
+  const qs = `q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}&category=${encodeURIComponent(activeCat)}&offset=${off}`;
   const { ok, data } = await api('/api/content/search?' + qs);
   if (!ok) { box.innerHTML = `<div class="err small" style="padding:1rem">${esc(data.error || 'erro')}</div>`; return; }
-  if (!data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; return; }
+  if (!data.results || !data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; return; }
   box.innerHTML = ''; data.results.forEach(r => box.append(storeCard(r)));
+  renderPager(data.total || 0, data.offset || 0, data.limit || 24);
+}
+function renderPager(total, offset, limit) {
+  const box = $('#searchPager'); if (!box) return; box.innerHTML = '';
+  if (total <= limit) return;
+  const page = Math.floor(offset / limit) + 1, pages = Math.ceil(total / limit);
+  const prev = document.createElement('button'); prev.className = 'ghost sm'; prev.textContent = '◀ Anterior'; prev.disabled = offset <= 0;
+  prev.onclick = () => { doSearch(Math.max(0, offset - limit)); $('#searchResults').scrollIntoView({ block: 'nearest' }); };
+  const info = document.createElement('span'); info.className = 'muted small'; info.textContent = `página ${page} de ${pages} · ${total} resultados`;
+  const next = document.createElement('button'); next.className = 'ghost sm'; next.textContent = 'Próxima ▶'; next.disabled = page >= pages;
+  next.onclick = () => { doSearch(offset + limit); $('#searchResults').scrollIntoView({ block: 'nearest' }); };
+  box.append(prev, info, next);
 }
 function storeCard(r) {
   const el = document.createElement('div'); el.className = 'store-card';
@@ -333,7 +383,7 @@ async function installSlug(slug, versionId, btn) {
   const { ok, data } = await api('/api/content/install', { method: 'POST', body: JSON.stringify({ slug, versionId }) });
   if (btn) {
     if (ok) { btn.textContent = '✓ instalado'; }
-    else { btn.disabled = false; btn.textContent = old; alert(data.error || 'falha ao instalar'); }
+    else { btn.disabled = false; btn.textContent = old; toast(data.error || 'falha ao instalar', 'err'); }
   }
   if (ok) {
     const deps = (data.installed || []).filter(x => x.dep).map(x => x.title);
@@ -406,7 +456,7 @@ async function loadInstalled() {
       toast('Alterado — reinicie o servidor pra aplicar.'); loadInstalled();
     };
     el.querySelector('.btn-rm').onclick = async () => {
-      if (!confirm('Remover ' + it.title + '?')) return;
+      if (!await confirmDialog('Remover ' + it.title + '?', { okText: 'Remover', danger: true })) return;
       const qs = it.slug ? ('slug=' + encodeURIComponent(it.slug)) : ('file=' + encodeURIComponent(it.file));
       await api('/api/content/installed?' + qs, { method: 'DELETE' }); loadInstalled();
     };
@@ -457,7 +507,7 @@ $('#srvCreateForm').addEventListener('submit', async (e) => {
   const btn = $('#srvCreateBtn'); btn.disabled = true; btn.textContent = 'criando… (baixando o servidor)';
   const r = await api('/api/servers/create', { method: 'POST', body: JSON.stringify({ name, loader, version }) });
   btn.disabled = false; btn.textContent = 'Criar servidor';
-  if (!r.ok) { alert(r.data.error || 'falha ao criar'); return; }
+  if (!r.ok) { toast(r.data.error || 'falha ao criar', 'err'); return; }
   $('#srvName').value = ''; $('#srvVersion').value = '';
   toast('Servidor criado: ' + r.data.server.name + ' (porta ' + r.data.server.port + ')');
   await loadServers(); renderServerManager();
@@ -482,12 +532,12 @@ function mpCard(r) {
     <div class="store-foot"><span class="muted small">⬇ ${fmtNum(r.downloads)}</span><span class="grow"></span>
       <button class="ok sm btn-mp-create">Criar servidor</button></div>`;
   el.querySelector('.btn-mp-create').onclick = async (ev) => {
-    if (!confirm(`Criar um servidor a partir de "${r.title}"?\n\nBaixa todos os mods do pack (de segundos a alguns minutos, dependendo do tamanho).`)) return;
+    if (!await confirmDialog(`Criar um servidor a partir de "${r.title}"?\n\nBaixa todos os mods do pack (de segundos a alguns minutos, dependendo do tamanho).`, { okText: 'Criar' })) return;
     const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'instalando…';
     const name = $('#mpName').value.trim();
     const { ok, data } = await api('/api/servers/create-modpack', { method: 'POST', body: JSON.stringify({ slug: r.slug, name }) });
     btn.disabled = false; btn.textContent = 'Criar servidor';
-    if (!ok) { alert(data.error || 'falha ao criar'); return; }
+    if (!ok) { toast(data.error || 'falha ao criar', 'err'); return; }
     toast('Modpack instalado: ' + data.server.name + ' — porta ' + data.server.port);
     await loadServers(); renderServerManager();
   };
@@ -530,7 +580,7 @@ function renderIntegrations(d) {
       if (a === 'secret') { const s = el.querySelector('.pl-secret').value.trim(); if (!s) return; const r = await api('/api/integrations/playit-secret', { method: 'POST', body: JSON.stringify({ secret: s }) }); toast(r.ok ? 'Secret salvo — agora ligue o túnel.' : (r.data.error || 'erro')); return loadIntegrations(); }
       ev.currentTarget.disabled = true;
       const r = await intgAction('playit', a);
-      if (!r.ok) alert(r.data.error || 'erro');
+      if (!r.ok) toast(r.data.error || 'erro', 'err');
       setTimeout(loadIntegrations, a === 'stop' ? 500 : 2000);
     });
     box.append(el);
@@ -542,13 +592,13 @@ function renderIntegrations(d) {
     let body = '';
     if (!t.installed) body = `<div class="intg-note">Precisa instalar no sistema (root): <code>sudo dnf install tailscale && sudo systemctl enable --now tailscaled</code></div>`;
     else if (!t.running) body = `<button class="ok sm act" data-a="start">Conectar (login)</button><div class="muted small" style="margin-top:.4rem">Se pedir permissão, rode uma vez <code>sudo tailscale up</code>.</div>`;
-    else body = `<div class="intg-note ok">Conectado. IP Tailscale: <code>${esc(t.ip || '?')}</code> — amigos na sua rede Tailscale entram por <code>${esc(t.ip || 'IP')}:PORTA</code>.</div><div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desconectar</button></div>`;
+    else body = `<div class="intg-note ok">Conectado. IP Tailscale: <code>${esc(t.ip || '?')}</code> — amigos na sua rede Tailscale entram por <code>${esc(t.ip || 'IP')}:PORTA</code>.</div><div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desconectar</button></div><div class="muted small" style="margin-top:.4rem">Se o botão der erro de permissão, rode uma vez: <code>sudo tailscale set --operator=$USER</code></div>`;
     el.innerHTML = `<div class="intg-head"><div class="intg-ic">🔒</div><div class="intg-meta"><div class="intg-title">Tailscale</div><div class="muted small">VPN privada: só quem você convidar acessa. Ótimo pra jogar entre amigos.</div></div>${intgPill(t.running)}</div><div class="intg-body">${body}</div>`;
     el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
       const a = ev.currentTarget.dataset.a; ev.currentTarget.disabled = true;
       const r = await intgAction('tailscale', a);
       if (a === 'start' && r.ok && r.data.loginUrl) { window.open(r.data.loginUrl, '_blank'); toast('Abra o link pra fazer login no Tailscale.'); }
-      else if (!r.ok) alert(r.data.error || 'erro');
+      else if (!r.ok) toast(r.data.error || 'erro', 'err');
       setTimeout(loadIntegrations, 900);
     });
     box.append(el);
@@ -571,12 +621,43 @@ function renderIntegrations(d) {
       if (a === 'token') { const tok = el.querySelector('.cf-token').value.trim(); if (!tok) return; const r = await api('/api/integrations/cloudflare-token', { method: 'POST', body: JSON.stringify({ token: tok }) }); toast(r.ok ? 'Token salvo.' : (r.data.error || 'erro')); return loadIntegrations(); }
       ev.currentTarget.disabled = true;
       const r = await intgAction('cloudflare', a);
-      if (!r.ok) alert(r.data.error || 'erro');
+      if (!r.ok) toast(r.data.error || 'erro', 'err');
       setTimeout(loadIntegrations, a === 'stop' ? 500 : 1500);
     });
     box.append(el);
   }
 }
 $('#intgReload').addEventListener('click', loadIntegrations);
+
+// ---- auditoria ----
+async function loadAudit() {
+  const { ok, data } = await api('/api/audit?lines=300');
+  const body = $('#auditBody'); if (!body) return;
+  body.innerHTML = '';
+  const items = (data && data.items) || [];
+  if (!ok || !items.length) { body.innerHTML = '<tr><td colspan="5" class="muted small">nada registrado ainda.</td></tr>'; return; }
+  items.forEach(it => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="muted small" style="white-space:nowrap">${esc(new Date(it.ts).toLocaleString('pt-BR'))}</td><td><span class="tag">${esc(it.action)}</span></td><td>${esc(it.detail || '')}</td><td class="muted small">${esc(it.server || '-')}</td><td class="muted small">${esc(it.ip || '-')}</td>`;
+    body.append(tr);
+  });
+}
+$('#auditReload').addEventListener('click', loadAudit);
+$('#auditClear').addEventListener('click', async () => {
+  if (!await confirmDialog('Limpar todo o histórico? Isso apaga os registros e não dá pra desfazer.', { okText: 'Limpar', danger: true })) return;
+  const { ok, data } = await api('/api/audit', { method: 'DELETE' });
+  if (!ok) return toast(data.error || 'erro ao limpar', 'err');
+  toast('Histórico limpo.'); loadAudit();
+});
+
+// sub-abas do Console (Servidor / Auditoria)
+document.querySelectorAll('.con-tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.con-tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  const mode = t.dataset.con;
+  document.querySelectorAll('#console [data-con-panel]').forEach(p => { p.hidden = p.dataset.conPanel !== mode; });
+  const aw = $('#autologWrap'); if (aw) aw.hidden = mode !== 'mc';
+  if (mode === 'audit') loadAudit();
+}));
 
 boot();

@@ -41,8 +41,14 @@ chmod 600 "$DEST/config.json"
 echo "==> Permissao pro painel controlar o servico (sudoers)"
 cat > /etc/sudoers.d/craftbox-panel <<EOF
 minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start $SERVICE, /usr/bin/systemctl stop $SERVICE, /usr/bin/systemctl restart $SERVICE
+minecraft ALL=(root) NOPASSWD: /usr/bin/tailscale up *, /usr/bin/tailscale down
 EOF
 chmod 440 /etc/sudoers.d/craftbox-panel
+
+# Se o tailscale estiver instalado, deixa o painel controlar sem root (plug-and-play)
+if command -v tailscale >/dev/null 2>&1; then
+  tailscale set --operator=minecraft 2>/dev/null || true
+fi
 
 echo "==> Instalando servico systemd"
 cp "$SRC/craftbox-panel.service" /etc/systemd/system/craftbox-panel.service

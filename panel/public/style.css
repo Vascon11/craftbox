@@ -293,3 +293,19 @@ button.sm{padding:.4rem .7rem;font-size:.82rem;border-radius:8px}
 .intg-note{font-size:.85rem;line-height:1.5;padding:.55rem .7rem;border-radius:8px;background:var(--card);border:1px solid var(--line);margin-bottom:.3rem;word-break:break-word}
 .intg-note.ok{border-color:var(--accent2)}
 .intg-note.warn{border-color:var(--warn)}
+
+/* paginador da loja de conteúdo */
+.pager{display:flex;align-items:center;justify-content:center;gap:1rem;margin-top:1.1rem;flex-wrap:wrap}
+.pager:empty{display:none}
+
+/* modais de confirmação/input no tema + toast de erro */
+.confirm-card{width:min(430px,92vw)}
+.confirm-msg{font-size:.95rem;line-height:1.55;white-space:pre-line}
+.confirm-actions{display:flex;justify-content:flex-end;gap:.6rem;margin-top:1.3rem}
+#toast.err{border-color:var(--danger);color:var(--txt)}
+
+/* sub-abas do Console (Servidor / Auditoria) */
+.con-tabs{display:flex;gap:.3rem;flex-wrap:wrap}
+.con-tab{background:transparent;border:1px solid transparent;color:var(--muted);padding:.35rem .75rem;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer}
+.con-tab:hover{color:var(--txt)}
+.con-tab.active{color:var(--accent);background:var(--accent-dim);border-color:var(--accent)}
