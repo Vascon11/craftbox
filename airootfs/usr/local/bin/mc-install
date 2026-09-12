@@ -446,6 +446,8 @@ WorkingDirectory=/opt/craftbox-panel
 ExecStart=/usr/bin/node /opt/craftbox-panel/server.js
 Restart=on-failure
 RestartSec=5
+[Install]
+WantedBy=multi-user.target
 PSVC
   # sudoers: painel controla os servicos das instancias sem senha
   cat > /etc/sudoers.d/craftbox-panel <<SUDO

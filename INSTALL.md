@@ -64,7 +64,7 @@ sudo dd if=craftbox-*.iso of=/dev/sdX bs=4M status=progress oflag=sync
 O instalador (`mc-install`) é em texto, direto, e pergunta uma coisa de cada vez.
 Valores entre `[colchetes]` são o padrão — é só apertar **Enter** pra aceitar.
 
-<!-- SCREENSHOT: tela inicial do instalador -->
+![Tela inicial do instalador](screenshots/instalador-inicio.png)
 
 1. **Aviso + confirmação** — ele avisa que vai apagar um disco. Digite `s` pra continuar.
 2. **Rede** — se tiver cabo, ele já pega internet sozinho. Sem cabo, ele pergunta o
@@ -89,14 +89,29 @@ Valores entre `[colchetes]` são o padrão — é só apertar **Enter** pra acei
    baixa o Minecraft e configura tudo** (uns minutos, mais lento em HD).
 9. **Fim** — ele avisa que terminou e oferece **reiniciar**. Tire o pendrive quando a tela apagar.
 
-<!-- SCREENSHOT: resumo antes de instalar -->
-<!-- SCREENSHOT: instalação concluída -->
+Rede detectada automaticamente e disco escolhido:
+
+![Rede e disco](screenshots/instalador-disco.png)
+
+As perguntas de sistema e do Minecraft:
+
+![Configuração do sistema e do Minecraft](screenshots/instalador-config.png)
+
+O resumo antes de mexer no disco:
+
+![Resumo da instalação](screenshots/instalador-resumo.png)
+
+E no fim, instalação concluída:
+
+![Instalação concluída](screenshots/instalador-concluido.png)
 
 ---
 
 ## 5. Depois de instalado
 
-Ao reiniciar, sozinho no boot: o **servidor sobe** na porta **25565** e o **painel web** fica no ar.
+Ao reiniciar, sozinho no boot: o **servidor sobe** na porta **25565** e o **painel web** fica no ar. Validado numa VM UEFI — os serviços sobem no boot:
+
+![Serviços no ar após a instalação](screenshots/instalado-status.png)
 
 ### Acessar o painel (jeito principal)
 

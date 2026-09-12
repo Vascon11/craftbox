@@ -24,8 +24,9 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 ## Appliance real (notebook Dell) — pra funcionar fora do demo
 - [x] **systemd template** `minecraft@.service` + `mc-backup@` + regra de **sudoers** (`systemctl … minecraft@*`) no `mc-install`/`setup.sh`. ✅
 - [x] `mc-install` cria o 1º servidor em `serversDir` (`/srv/minecraft/<id>`, multi-servidor por padrão) e **embarca + configura o painel** (sobe no boot). ✅
-- [~] **Bootar a ISO nova numa VM** pra validar o fluxo completo (instalar → bootar → painel + servidor no ar) e **tirar os prints da interface** pro `INSTALL.md`. ISO já compilada (`out/craftbox-2026.09.12`) e VM QEMU/UEFI preparada; **pausado pra continuar depois**.
-- [x] **`INSTALL.md`** — guia passo a passo (Ventoy + boot + interface do instalador + pós-instalação). Falta só colar os prints da interface.
+- [x] **Validado numa VM (UEFI/QEMU)**: a ISO boota, o instalador roda todas as etapas, instala (Arch + Java 26 + nodejs + Paper), e no reboot `minecraft@principal` e `sshd` sobem sozinhos e o painel responde (`configured:true`). ✅
+  - 🐞 **Bug pego e corrigido**: o serviço `craftbox-panel` não tinha `[Install] WantedBy=`, então não subia no boot (só ao iniciar na mão). Corrigido no `mc-install`. **Rebuild da ISO** recomendado pra levar o fix.
+- [x] **`INSTALL.md`** — guia passo a passo com **prints reais da interface** (Ventoy + boot + instalador + pós-instalação). ✅
 - [ ] Testar **Forge/NeoForge** de verdade (modpack) com uma versão de Java compatível.
 - [ ] Soltar uma **release/tag** pra o CI publicar a ISO nova nos Releases.
 
