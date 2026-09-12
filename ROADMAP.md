@@ -24,7 +24,8 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 ## Appliance real (notebook Dell) — pra funcionar fora do demo
 - [x] **systemd template** `minecraft@.service` + `mc-backup@` + regra de **sudoers** (`systemctl … minecraft@*`) no `mc-install`/`setup.sh`. ✅
 - [x] `mc-install` cria o 1º servidor em `serversDir` (`/srv/minecraft/<id>`, multi-servidor por padrão) e **embarca + configura o painel** (sobe no boot). ✅
-- [ ] **Bootar a ISO nova numa VM** pra validar o fluxo completo de ponta a ponta (não deu pra testar em hardware aqui).
+- [~] **Bootar a ISO nova numa VM** pra validar o fluxo completo (instalar → bootar → painel + servidor no ar) e **tirar os prints da interface** pro `INSTALL.md`. ISO já compilada (`out/craftbox-2026.09.12`) e VM QEMU/UEFI preparada; **pausado pra continuar depois**.
+- [x] **`INSTALL.md`** — guia passo a passo (Ventoy + boot + interface do instalador + pós-instalação). Falta só colar os prints da interface.
 - [ ] Testar **Forge/NeoForge** de verdade (modpack) com uma versão de Java compatível.
 - [ ] Soltar uma **release/tag** pra o CI publicar a ISO nova nos Releases.
 

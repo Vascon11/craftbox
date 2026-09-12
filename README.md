@@ -69,6 +69,8 @@ Com 4 GB roda Paper com 3–6 amigos num mundo normal. Mods pesados (modpacks gr
 
 ## Como usar
 
+> 📖 **Guia completo de instalação (Ventoy + passo a passo com a interface): [`INSTALL.md`](INSTALL.md).** O resumo abaixo é o essencial.
+
 ### 1. Baixar a ISO
 
 Pegue a última versão em **[Releases](https://github.com/Vascon11/craftbox/releases)** (ou compile localmente — veja abaixo). Confira o checksum:
