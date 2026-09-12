@@ -40,7 +40,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          name: craftbox ${{ github.ref_name }}
           files: |
             out/*.iso
             out/*.sha256
           generate_release_notes: true
+          # tag com '-' (ex: v1.0.0-rc1) sai marcada como pré-release
+          prerelease: ${{ contains(github.ref_name, '-') }}
