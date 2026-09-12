@@ -1,8 +1,12 @@
-# craftbox 🧱
+<p align="center">
+  <img src="panel/public/logo.png" alt="craftbox" width="160">
+</p>
 
-**Uma mini-distro Linux que transforma um notebook velho num servidor de Minecraft dedicado.**
+<h1 align="center">craftbox</h1>
 
-`craftbox` é um *spin* enxuto do [Arch Linux](https://archlinux.org): você grava a ISO num pendrive, dá boot, responde algumas perguntas, e no fim tem uma máquina headless que existe pra uma coisa só — rodar um servidor de Minecraft (Paper ou Fabric) que sobe sozinho no boot.
+<p align="center"><b>Uma mini-distro Linux que transforma um notebook velho num servidor de Minecraft dedicado.</b></p>
+
+`craftbox` é um *spin* enxuto do [Arch Linux](https://archlinux.org): você grava a ISO num pendrive, dá boot, responde algumas perguntas, e no fim tem uma máquina headless que existe pra uma coisa só — rodar um servidor de Minecraft (Paper, Fabric ou o experimental Pumpkin) que sobe sozinho no boot.
 
 Sem ambiente gráfico, sem peso: toda a RAM sobra pro jogo.
 
@@ -17,12 +21,14 @@ O craftbox vem com um **painel web** (**Node.js puro, zero dependências**) pra 
 
 ![Painel — dashboard](screenshots/painel-dashboard.jpg)
 
-- 🖥️ **Multi-servidor** — crie/clone/apague vários servidores (Paper ou Fabric), cada um com loader, versão e porta próprios; troca entre eles por um seletor. Filosofia "um rodando por vez" pra hardware fraco.
-- 📊 **Painel** — status (no ar/desligado), jogadores online (RCON) e stats em tempo real: frequência de CPU, RAM, disco, temperatura e load.
+- 🖥️ **Multi-servidor** — crie/clone/apague vários servidores (**Paper**, **Fabric** ou **Pumpkin** — servidor em Rust, experimental), cada um com loader, versão e porta próprios; troca entre eles por um seletor. Filosofia "um rodando por vez" pra hardware fraco.
+- 📊 **Painel** — status (no ar/desligado), jogadores online (RCON) e stats em tempo real: frequência de CPU, RAM, disco, temperatura, load, **peso do mundo** e **velocidade da internet** (sob demanda).
 - ⏻ **Ligar / reiniciar / desligar** via systemd (ou `systemctl --user`, modo **rootless** sem sudo).
 - 🧩 **Loja de mods/plugins** estilo Prism/Modrinth — busca no [Modrinth](https://modrinth.com) com ícones, categorias e ordenação, **escolha de versão**, **dependências automáticas** e gestão dos instalados (ativar/desativar, atualizar, remover).
-- 📦 **Modpacks** — cria um servidor a partir de um modpack do Modrinth (`.mrpack`) em **Fabric/Quilt/Forge/NeoForge**: baixa mods + configs, monta a instância e mostra o link do pack pros jogadores instalarem o mesmo no cliente.
-- 🎮 **Compatibilidade** — **modo offline** ("pirata") e **Bedrock** (Geyser + Floodgate) em 1 clique.
+- 📦 **Modpacks** — cria um servidor a partir de um modpack do Modrinth (`.mrpack`) em **Fabric/Quilt/Forge/NeoForge**: baixa os mods **em paralelo** (com **tela de carregamento** e progresso), **desativa sozinho os mods client-only** que derrubariam um servidor dedicado, monta a instância e mostra o link do pack pros jogadores instalarem o mesmo no cliente.
+- 🌐 **Integrações / Rede** — conecte o servidor sem abrir porta no roteador: **playit.gg** (túnel), **Cloudflare Tunnel** e **Tailscale** (VPN privada entre amigos), além de configurar **Wi-Fi** pelo próprio painel (`nmcli`).
+- 🎮 **Compatibilidade** — **modo offline** ("pirata", com plugin de login por usuário/senha) e **Bedrock** (Geyser + Floodgate) em 1 clique.
+- 🔐 **Acesso** — login por senha ou **contas de usuário** (papéis admin/user) e **histórico de ações**.
 - ⚙️ **Configuração** — editor visual do `server.properties`; **Console** RCON; **Logs** ao vivo; **Backups** do mundo.
 
 ![Painel — loja de mods](screenshots/painel-conteudo.jpg)
@@ -42,7 +48,9 @@ Ao dar boot, o instalador (`mc-install`) abre **automaticamente** e cuida de tud
 - 🌐 **Rede** — detecta cabo (DHCP) ou pergunta o Wi-Fi e **guarda a conexão** pro sistema instalado (via NetworkManager)
 - 💽 **Instalação automática** — particiona (UEFI/GPT), formata e instala um Arch mínimo no disco
 - 🎮 **Escolha do servidor na hora** — **Paper** (plugins, leve) ou **Fabric** (mods, com mods de performance já incluídos)
+- ⚡ **Modo otimizado ou limpo** — na instalação você escolhe entre já vir com otimizações pra hardware fraco (mods de performance + `view/simulation-distance` menores) ou um servidor limpo pra configurar do seu jeito
 - 🖥️ **Painel web já embarcado** — o `craftbox-panel` vem instalado e sobe no boot em `http://<ip>:8080` (você define a senha na instalação)
+- 👋 **Tela de boas-vindas** no console após instalar, mostrando o **IP real** e o endereço do painel (`http://<ip>:8080`) — você já sabe onde acessar
 - 🗂️ **Multi-servidor de fábrica** — cada instância fica em `/srv/minecraft/<nome>` com seu serviço `minecraft@<nome>`; crie/troque servidores pelo painel
 - 🧠 **Heap da JVM auto-dimensionado** pela RAM detectada + **[flags do Aikar](https://docs.papermc.io/paper/aikars-flags)** aplicadas
 - ⚙️ **Otimizado pra CPU fraca** — `view-distance` e `simulation-distance` calibrados
