@@ -41,6 +41,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         <span class="lbl">Painel</span>
       </button>
+      <button class="tab" data-tab="servers" id="tabServers" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="1.5"/><rect x="2" y="14" width="20" height="7" rx="1.5"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
+        <span class="lbl">Servidores</span>
+      </button>
       <button class="tab" data-tab="config">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
         <span class="lbl">Configuração</span>
@@ -152,6 +156,18 @@
             <div class="big"><span id="temp">—</span> <span class="unit">°C</span></div>
             <div class="sub" id="loadMeta">—</div>
           </div>
+        </div>
+      </section>
+
+      <!-- ============ SERVIDORES (visão geral) ============ -->
+      <section id="servers" class="panel" hidden>
+        <div class="card">
+          <div class="row spread">
+            <h3>Servidores</h3>
+            <button id="serversManage" class="ghost sm">⚙ Gerenciar</button>
+          </div>
+          <p class="muted small" style="margin-top:.6rem">Todas as instâncias. Ligue <b>uma de cada vez</b> (hardware fraco). Clique em Selecionar pra abrir uma no Painel.</p>
+          <div id="serversGrid" class="store-grid"></div>
         </div>
       </section>
 

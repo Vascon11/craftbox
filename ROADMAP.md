@@ -14,7 +14,7 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 - [x] **Gerenciar acesso / usuários** (aba Configuração → Acesso): ✅
   - [x] Trocar a senha do painel pela própria interface.
   - [x] Contas de usuário (usuário/email + senha, papéis admin/user) — opt-in: sem contas usa senha única; ao criar a 1ª conta o login passa a pedir usuário+senha. Histórico registra quem fez cada ação.
-- [ ] **Lista de servidores no painel** — uma visão/aba com cards de todas as instâncias (além do seletor no topo).
+- [x] **Lista de servidores no painel** — aba "Servidores" com cards (status + Ligar/Desligar/Selecionar). ✅
 - [x] **Paginação na busca de modpacks**. ✅
 - [ ] **Terminal da máquina** no Console — pausado: o classificador de segurança marca como RCE; precisa liberar permissão pra concluir.
 - [ ] **Tema "gaming"** inspirado nas artes de Minecraft dashboard (visual).

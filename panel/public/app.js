@@ -39,8 +39,10 @@ function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); l
 // ---- multi-servidor ----
 async function loadServers() {
   const { ok, data } = await api('/api/servers');
-  const wrap = $('#serverBar');
-  if (!ok || !data.multi) { if (wrap) wrap.hidden = true; currentServer = ''; return; }
+  const wrap = $('#serverBar'), tabS = $('#tabServers');
+  const multi = ok && data.multi;
+  if (tabS) tabS.hidden = !multi;
+  if (!multi) { if (wrap) wrap.hidden = true; currentServer = ''; return; }
   wrap.hidden = false;
   currentServer = data.activeId || (data.servers[0] && data.servers[0].id) || '';
   const sel = $('#serverSelect'); sel.innerHTML = '';
@@ -49,6 +51,30 @@ async function loadServers() {
     const o = new Option(label, s.id); sel.add(o);
   });
   sel.value = currentServer;
+  renderServersOverview(data.servers);
+}
+function renderServersOverview(servers) {
+  const box = $('#serversGrid'); if (!box) return; box.innerHTML = '';
+  servers.forEach(s => {
+    const running = s.active === 'active';
+    const el = document.createElement('div'); el.className = 'store-card';
+    el.innerHTML = `
+      <div class="store-top" style="justify-content:space-between">
+        <div class="store-title">${esc(s.name)}</div>
+        <span class="status-pill"><span class="dot ${running ? 'on' : 'idle'}"></span>${running ? 'no ar' : 'desligado'}</span>
+      </div>
+      <div class="muted small">${esc(s.loader)}${s.mcVersion ? ' ' + esc(s.mcVersion) : ''} · porta ${s.port || '?'}${s.selected ? ' · <b>selecionado</b>' : ''}${s.modpack ? ' · 📦 modpack' : ''}</div>
+      <div class="store-foot">
+        <button class="ghost sm act-sel">Selecionar</button><span class="grow"></span>
+        ${running ? '<button class="danger sm act-stop">Desligar</button>' : '<button class="ok sm act-start">Ligar</button>'}
+      </div>`;
+    el.querySelector('.act-sel').onclick = () => { switchServer(s.id); const t = document.querySelector('.tab[data-tab="painel"]'); if (t) t.click(); };
+    const st = el.querySelector('.act-start');
+    if (st) st.onclick = async (ev) => { ev.currentTarget.disabled = true; await api('/api/power?server=' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ action: 'start' }) }); toast('Ligando ' + s.name + '…'); setTimeout(loadServers, 2500); };
+    const sp = el.querySelector('.act-stop');
+    if (sp) sp.onclick = async (ev) => { if (!await confirmDialog('Desligar "' + s.name + '"?', { okText: 'Desligar', danger: true })) return; ev.currentTarget.disabled = true; await api('/api/power?server=' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ action: 'stop' }) }); toast('Desligando ' + s.name + '…'); setTimeout(loadServers, 1500); };
+    box.append(el);
+  });
 }
 async function switchServer(id) {
   await api('/api/servers/select', { method: 'POST', body: JSON.stringify({ id }) });
@@ -554,6 +580,8 @@ $('#bedrockBtn').addEventListener('click', async () => {
 // ---- bindings multi-servidor ----
 $('#serverSelect').addEventListener('change', (e) => switchServer(e.target.value));
 $('#serverManage').addEventListener('click', () => { $('#srvOverlay').hidden = false; renderServerManager(); });
+$('#serversManage').addEventListener('click', () => { $('#srvOverlay').hidden = false; renderServerManager(); });
+$('#tabServers').addEventListener('click', loadServers);
 $('#srvClose').addEventListener('click', () => $('#srvOverlay').hidden = true);
 $('#srvOverlay').addEventListener('click', (e) => { if (e.target === $('#srvOverlay')) $('#srvOverlay').hidden = true; });
 $('#srvCreateForm').addEventListener('submit', async (e) => {
