@@ -28,7 +28,11 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
   - 🐞 **Bug pego e corrigido**: o serviço `craftbox-panel` não tinha `[Install] WantedBy=`, então não subia no boot (só ao iniciar na mão). Corrigido no `mc-install`. **Rebuild da ISO** recomendado pra levar o fix.
 - [x] **`INSTALL.md`** — guia passo a passo com **prints reais da interface** (Ventoy + boot + instalador + pós-instalação). ✅
 - [ ] Testar **Forge/NeoForge** de verdade (modpack) com uma versão de Java compatível.
-- [ ] Soltar uma **release/tag** pra o CI publicar a ISO nova nos Releases.
+- [x] **Pré-release `v1.0.0-rc1`** cortada — CI publica a ISO nos Releases (marcada como pre-release). ✅
+- [ ] Depois do RC: validar o RC final numa VM (painel no boot + tela de boas-vindas), colher feedback e soltar a `v1.0.0` estável.
+
+## Ideias / futuro
+- [ ] **Servidor Pumpkin** (Rust, binário único sem Java, ~100MB RAM, multi-core) como tipo experimental na criação de servidor — encaixaria muito no hardware fraco; ainda é beta. Alternativa parecida: SteelMC. Ver [nota de pesquisa].
 
 ## Fase final — otimização (o "endgame", é difícil e tudo bem)
 - [ ] **Reescrever o backend em Rust** (hoje é Node.js puro). Objetivo: binário único, sem runtime, footprint menor de RAM/CPU — importante num notebook fraco.
