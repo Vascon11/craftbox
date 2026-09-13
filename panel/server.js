@@ -842,6 +842,9 @@ async function deleteInstance(id) {
 async function unzipTo(zip, dest) {
   const r = await run('unzip', ['-o', '-q', zip, '-d', dest], { timeout: 180000 });
   if (r.code !== 0) throw new Error('unzip falhou: ' + (r.stderr || r.stdout).slice(-200));
+  // alguns .mrpack guardam arquivos com modo 000 (perms preservadas) — sem isso o
+  // proprio painel nao consegue LER o modrinth.index.json nem os overrides (EACCES)
+  await run('chmod', ['-R', 'u+rwX,go+rX', dest], { timeout: 60000 });
 }
 // Mods client-only conhecidos (renderização/UI/shaders): num servidor dedicado
 // eles tentam carregar classes de cliente e derrubam o boot ("invalid dist

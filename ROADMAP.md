@@ -48,6 +48,10 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
   - Ideias de crates: um HTTP mínimo (ex: `tiny_http`/`axum`), TLS/HTTP client pra Modrinth/Fabric/Paper, `zip` pra `.mrpack`, RCON manual sobre TCP.
 - [ ] **Compilar na instalação / no primeiro boot** — o appliance compila o backend na hora (ISO instala a toolchain Rust e roda `cargo build --release` com `RUSTFLAGS="-C target-cpu=native"`), gerando um binário otimizado pro CPU específico daquela máquina. Cair pra binário pré-compilado se a compilação falhar.
 
+## Pendências abertas
+- [ ] **RAM 4 GB insuficiente pro servidor**: subir o Paper (heap ~1,7 GB = RAM−2 GB) + painel + OS joga o notebook de 4 GB em **swap thrashing** no HD 5400rpm — a máquina inteira trava (até o SSH cai). Piora com `Restart=on-failure` (OOM → reinicia → trava de novo). Ações: (a) heap default menor / mais folga pra ≤4 GB; (b) `MemoryMax`/`MemoryHigh` no unit pra proteger o OS; (c) o real: **RAM 8 GB** (já no plano). Achado ao ligar `minecraft@axos-pudding` no craftbox real (13/09).
+- [x] **`SuccessExitStatus=143 SIGTERM`** no `minecraft@.service` — parar o servidor saía como `failed` (JVM sai 143 no SIGTERM). Corrigido no mc-install. ✅
+
 ## Hardware (tarefas físicas)
 - [ ] Trocar a bateria **CR2032** (código de 5 beeps / RTC resetando pra 2013).
 - [ ] Resolver o **clock preso da CPU** (carregador/bateria principal — a CPU está travada perto do mínimo).

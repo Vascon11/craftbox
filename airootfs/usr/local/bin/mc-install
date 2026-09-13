@@ -339,6 +339,8 @@ RestartSec=15
 # Paper/vanilla salvam o mundo ao receber SIGTERM
 KillSignal=SIGTERM
 TimeoutStopSec=90
+# parar o servidor (SIGTERM) faz a JVM sair com 143 — isso e' parada limpa, nao falha
+SuccessExitStatus=143 SIGTERM
 [Install]
 WantedBy=multi-user.target
 EOF
