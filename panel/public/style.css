@@ -54,6 +54,8 @@ code{background:var(--card2);padding:.12em .4em;border-radius:5px;font-size:.88e
 .side-brand .nm{font-weight:800;font-size:1.12rem;letter-spacing:-.02em;color:#fff}
 .side-brand .sub{font-size:.68rem;color:#6b7a8a;text-transform:uppercase;letter-spacing:.12em;font-weight:700}
 .side-nav{display:flex;flex-direction:column;gap:.15rem;flex:1;overflow:auto}
+.side-pair{display:grid;grid-template-columns:1fr 1fr;gap:.15rem}
+.side-pair .tab{padding-right:.3rem;padding-left:.3rem}
 .side-sep{height:1px;background:rgba(255,255,255,.06);margin:.5rem .3rem}
 .tab{display:flex;align-items:center;gap:.7rem;width:100%;
   background:transparent;border:none;color:#93a1b1;
@@ -201,6 +203,7 @@ select{cursor:pointer}
   .side-brand{padding:0 .4rem 0 .2rem}
   .side-brand .sub{display:none}
   .side-nav{flex-direction:row;overflow-x:auto;gap:.2rem;flex:1}
+  .side-pair{display:contents}
   .side-sep{display:none}
   .tab{white-space:nowrap;padding:.5rem .7rem}
   .tab.active{box-shadow:inset 0 -3px 0 var(--accent)}
@@ -300,7 +303,6 @@ button.sm{padding:.4rem .7rem;font-size:.82rem;border-radius:8px}
 .srv-tab{background:transparent;border:1px solid transparent;color:var(--muted);padding:.4rem .8rem;border-radius:8px;font-weight:600;font-size:.85rem;cursor:pointer}
 .srv-tab:hover{color:var(--txt)}
 .srv-tab.active{color:var(--accent);background:var(--accent-dim);border-color:var(--accent)}
-#mpResults{max-height:46vh;overflow:auto;margin-top:.8rem}
 
 /* ---------- INTEGRAÇÕES / REDE ---------- */
 .intg-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:1rem;margin-top:1rem}
@@ -336,3 +338,14 @@ button.sm{padding:.4rem .7rem;font-size:.82rem;border-radius:8px}
 
 /* logos das integrações (imagem no lugar do emoji) */
 .intg-ic img{width:30px;height:30px;object-fit:contain;display:block}
+
+/* realce de severidade no console */
+.log-warn{color:#f5c76b}
+.log-err{color:#ff7a6e;font-weight:600}
+
+/* config agrupada em seções */
+.cfg-sec{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--card);margin:0 0 .9rem;overflow:hidden}
+.cfg-sec summary{cursor:pointer;padding:.7rem .9rem;font-weight:700;font-size:.82rem;color:var(--txt);background:var(--card2);letter-spacing:.02em}
+.cfg-sec summary:hover{color:var(--accent)}
+.cfg-sec[open] summary{border-bottom:1px solid var(--line)}
+.props-sec{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.9rem;padding:.9rem}

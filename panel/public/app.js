@@ -4,7 +4,7 @@ let currentServer = '';
 const api = async (path, opts = {}) => {
   let url = path;
   const skip = path === '/api/login' || path === '/api/logout' || path === '/api/authcheck' || path.startsWith('/api/servers');
-  if (currentServer && path.startsWith('/api/') && !skip) {
+  if (currentServer && path.startsWith('/api/') && !skip && !path.includes('server=')) {
     url += (path.includes('?') ? '&' : '?') + 'server=' + encodeURIComponent(currentServer);
   }
   const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
@@ -39,22 +39,33 @@ function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); l
 // ---- multi-servidor ----
 async function loadServers() {
   const { ok, data } = await api('/api/servers');
-  const wrap = $('#serverBar'), tabS = $('#tabServers');
-  const multi = ok && data.multi;
-  if (tabS) tabS.hidden = !multi;
-  if (!multi) { if (wrap) wrap.hidden = true; currentServer = ''; return; }
-  wrap.hidden = false;
-  currentServer = data.activeId || (data.servers[0] && data.servers[0].id) || '';
-  const sel = $('#serverSelect'); sel.innerHTML = '';
-  data.servers.forEach(s => {
-    const label = `${s.name} · ${s.loader}${s.mcVersion ? ' ' + s.mcVersion : ''}${s.active === 'active' ? ' 🟢' : ''}`;
-    const o = new Option(label, s.id); sel.add(o);
-  });
-  sel.value = currentServer;
+  if (!ok) return;
+  const wrap = $('#serverBar');
+  const multi = data.multi;
+  if (wrap) wrap.hidden = !multi;
+  if (multi) {
+    currentServer = data.activeId || (data.servers[0] && data.servers[0].id) || '';
+    const sel = $('#serverSelect'); sel.innerHTML = '';
+    data.servers.forEach(s => {
+      const label = `${s.name} · ${s.loader}${s.mcVersion ? ' ' + s.mcVersion : ''}${s.active === 'active' ? ' 🟢' : ''}`;
+      const o = new Option(label, s.id); sel.add(o);
+    });
+    sel.value = currentServer;
+    const cur = data.servers.find(s => s.id === currentServer);
+    consoleSrv(cur ? cur.name : currentServer);
+  } else currentServer = '';
   renderServersOverview(data.servers);
 }
+function serverPower(id, action) { return api('/api/servers/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: JSON.stringify({}) }); }
 function renderServersOverview(servers) {
   const box = $('#serversGrid'); if (!box) return; box.innerHTML = '';
+  const runningAny = (servers || []).find(s => s.active === 'active');
+  const hint = $('#serversHint');
+  if (hint) {
+    hint.innerHTML = runningAny
+      ? `<b>⚠</b> "Instâncias disponíveis. Por limitações de hardware, execute apenas um servidor por vez. Clique em \"Selecionar\" para gerenciar no painel acima."<br><span style="color:var(--danger,#e0604a)">Já tem <b>${esc(runningAny.name)}</b> no ar — ligar outro pode travar o hardware.</span>`
+      : 'Instâncias disponíveis. Por limitações de hardware, execute apenas um servidor por vez. Clique em "Selecionar" para gerenciar no painel acima.';
+  }
   servers.forEach(s => {
     const running = s.active === 'active';
     const el = document.createElement('div'); el.className = 'store-card';
@@ -70,16 +81,23 @@ function renderServersOverview(servers) {
       </div>`;
     el.querySelector('.act-sel').onclick = () => { switchServer(s.id); const t = document.querySelector('.tab[data-tab="painel"]'); if (t) t.click(); };
     const st = el.querySelector('.act-start');
-    if (st) st.onclick = async (ev) => { ev.currentTarget.disabled = true; await api('/api/power?server=' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ action: 'start' }) }); toast('Ligando ' + s.name + '…'); setTimeout(loadServers, 2500); };
+    if (st) st.onclick = async (ev) => {
+      const other = (servers || []).find(x => x.active === 'active' && x.id !== s.id);
+      if (other && !await confirmDialog('Já tem "' + other.name + '" no ar. Ligar "' + s.name + '" agora pode travar o hardware. Continuar?', { okText: 'Ligar mesmo assim', danger: true })) return;
+      ev.currentTarget.disabled = true; await serverPower(s.id, 'start'); toast('Ligando ' + s.name + '…'); setTimeout(loadServers, 2500);
+    };
     const sp = el.querySelector('.act-stop');
-    if (sp) sp.onclick = async (ev) => { if (!await confirmDialog('Desligar "' + s.name + '"?', { okText: 'Desligar', danger: true })) return; ev.currentTarget.disabled = true; await api('/api/power?server=' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ action: 'stop' }) }); toast('Desligando ' + s.name + '…'); setTimeout(loadServers, 1500); };
+    if (sp) sp.onclick = async (ev) => { if (!await confirmDialog('Desligar "' + s.name + '"?', { okText: 'Desligar', danger: true })) return; ev.currentTarget.disabled = true; await serverPower(s.id, 'stop'); toast('Desligando ' + s.name + '…'); setTimeout(loadServers, 1500); };
     box.append(el);
   });
 }
 async function switchServer(id) {
   await api('/api/servers/select', { method: 'POST', body: JSON.stringify({ id }) });
   currentServer = id;
+  resetConsole();
+  consoleSrv(id);
   reloadAll();
+  refreshLogs(true);
 }
 async function renderServerManager() {
   const { data } = await api('/api/servers');
@@ -121,6 +139,11 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   t.classList.add('active');
   document.querySelectorAll('.panel').forEach(p => p.hidden = true);
   $('#' + t.dataset.tab).hidden = false;
+  if (t.dataset.tab === 'modpacks' && !$('#mpResults').children.length) doMpSearch(0);
+  if (t.dataset.tab === 'painel') loadServers();
+  if (t.dataset.tab === 'conteudo') { loadContentInfo(); loadInstalled(); }
+  if (t.dataset.tab === 'console') refreshLogs(true);
+  if (t.dataset.tab === 'integra') loadIntegrations();
 }));
 
 // ---- status ----
@@ -165,21 +188,30 @@ let statusTimer;
 function startStatus() { refreshStatus(); clearInterval(statusTimer); statusTimer = setInterval(refreshStatus, 3000); }
 
 // ---- power ----
-async function power(action, btn) {
+async function power(action, serverId) {
   const msg = $('#powerMsg');
   const labels = { start: 'ligando', restart: 'reiniciando', stop: 'desligando' };
+  const target = serverId || currentServer;
   document.querySelectorAll('#painel button').forEach(b => b.disabled = true);
   msg.textContent = (labels[action] || 'executando') + '…';
-  const { ok, data } = await api('/api/power', { method: 'POST', body: JSON.stringify({ action }) });
+  const { ok, data } = await serverPower(target, action);
   msg.textContent = ok
-    ? `✓ comando de ${labels[action] || action} enviado — acompanhe o estado acima`
+    ? `✓ comando de ${labels[action] || action} enviado para ${target} — acompanhe o estado acima`
     : ('erro: ' + (data.output || data.error || '')).slice(0, 200);
   setTimeout(() => { document.querySelectorAll('#painel button').forEach(b => b.disabled = false); refreshStatus(); }, 1500);
   setTimeout(() => { const m = $('#powerMsg'); if (m) m.textContent = ''; }, 6000);
 }
-$('#btnStart').addEventListener('click', () => power('start'));
-$('#btnRestart').addEventListener('click', () => power('restart'));
-$('#btnStop').addEventListener('click', async () => { if (await confirmDialog('Desligar o servidor? Jogadores serão desconectados.', { okText: 'Desligar', danger: true })) power('stop'); });
+$('#btnStart').addEventListener('click', () => power('start', currentServer));
+$('#btnRestart').addEventListener('click', () => power('restart', currentServer));
+$('#btnStop').addEventListener('click', async () => { if (await confirmDialog('Desligar o servidor? Jogadores serão desconectados.', { okText: 'Desligar', danger: true })) power('stop', currentServer); });
+
+let serversPolling = false;
+async function pollServers() {
+  if (serversPolling) return;
+  serversPolling = true;
+  try { await loadServers(); } catch {} finally { serversPolling = false; }
+}
+setInterval(pollServers, 8000);
 
 // ---- config (server.properties) ----
 const COMMON = [
@@ -200,35 +232,67 @@ const COMMON = [
   ['spawn-monsters', 'Gerar monstros', 'bool'],
   ['enable-command-block', 'Command blocks', 'bool'],
 ];
+const P_SEC = {
+  'Rede & Acesso': ['server-ip', 'server-ipv6', 'server-port', 'query.port', 'enable-query', 'enable-rcon', 'rcon.port', 'rcon.password', 'broadcast-rcon-to-ops', 'online-mode', 'white-list', 'enforce-whitelist', 'announce-player-achievements'],
+  'Gameplay & Regras': ['motd', 'difficulty', 'gamemode', 'pvp', 'hardcore', 'allow-nether', 'spawn-monsters', 'spawn-animals', 'spawn-npcs', 'spawn-protection', 'level-name', 'level-seed', 'level-type', 'generate-structures', 'allow-flight', 'force-gamemode', 'enable-command-block', 'max-world-size'],
+  'Desempenho & Limites': ['max-players', 'view-distance', 'simulation-distance', 'max-tick-time', 'entity-broadcast-range-percentage', 'network-compression-threshold', 'player-idle-timeout'],
+};
+const SEC_ORDER = ['Rede & Acesso', 'Gameplay & Regras', 'Desempenho & Limites', 'Avançado'];
 let propsCache = {};
 async function loadProps() {
   const { data } = await api('/api/properties');
   propsCache = data.properties || {};
-  const form = $('#propsForm'); form.innerHTML = '';
-  const shown = new Set();
-  const field = (key, label, type, opts) => {
-    const val = propsCache[key] ?? '';
-    const d = document.createElement('div'); d.className = 'prop';
-    let ctrl;
-    if (type === 'bool') {
-      ctrl = document.createElement('select');
-      ['true', 'false'].forEach(o => { const op = new Option(o === 'true' ? 'sim' : 'não', o); ctrl.add(op); });
-      ctrl.value = (val === 'true') ? 'true' : 'false';
-    } else if (type === 'select') {
-      ctrl = document.createElement('select');
-      opts.forEach(o => ctrl.add(new Option(o, o)));
-      ctrl.value = val;
-    } else {
-      ctrl = document.createElement('input'); ctrl.type = type === 'number' ? 'number' : 'text'; ctrl.value = val;
-    }
-    ctrl.dataset.key = key;
-    d.append(Object.assign(document.createElement('label'), { textContent: label }), ctrl);
-    form.append(d); shown.add(key);
-  };
-  COMMON.forEach(([k, l, t, o]) => { if (k in propsCache || t === 'bool' || t === 'select') field(k, l, t, o); });
-  // demais chaves como texto
-  Object.keys(propsCache).sort().forEach(k => { if (!shown.has(k)) field(k, k, 'text'); });
+  renderProps();
 }
+function renderProps() {
+  const form = $('#propsForm'); if (!form) return;
+  form.innerHTML = '';
+  const filter = ($('#cfgSearch').value.trim() || '').toLowerCase();
+  const entryOf = (k) => COMMON.find(c => c[0] === k);
+  const labelOf = (k) => (entryOf(k) && entryOf(k)[1]) || k;
+  const typeOf = (k) => (entryOf(k) && entryOf(k)[2]) || 'text';
+  const secOf = (k) => { for (const s of SEC_ORDER) if (s !== 'Avançado' && P_SEC[s].includes(k)) return s; return 'Avançado'; };
+  const visible = (k) => !filter || k.toLowerCase().includes(filter) || labelOf(k).toLowerCase().includes(filter);
+  const shown = (k) => (k in propsCache) || ['bool', 'select'].includes(typeOf(k));
+  const secSet = Object.fromEntries(SEC_ORDER.map(s => [s, new Set()]));
+  COMMON.forEach(([k]) => secSet[secOf(k)].add(k));
+  Object.keys(propsCache).forEach(k => secSet[secOf(k)].add(k));
+  let any = false;
+  SEC_ORDER.forEach(sec => {
+    let keys;
+    if (sec === 'Avançado') keys = [...secSet[sec]].filter(k => !Object.values(P_SEC).flat().includes(k)).sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
+    else keys = P_SEC[sec].filter(k => secSet[sec].has(k));
+    const items = keys.filter(k => shown(k) && visible(k));
+    if (!items.length) return;
+    any = true;
+    const d = document.createElement('details'); d.className = 'cfg-sec'; d.open = true;
+    const sum = document.createElement('summary'); sum.textContent = `${sec} · ${items.length} ${items.length === 1 ? 'campo' : 'campos'}`;
+    const wrap = document.createElement('div'); wrap.className = 'props-sec';
+    items.forEach(k => {
+      const val = propsCache[k] ?? '';
+      const el = document.createElement('div'); el.className = 'prop';
+      let ctrl;
+      if (typeOf(k) === 'bool') {
+        ctrl = document.createElement('select');
+        ['true', 'false'].forEach(o => ctrl.add(new Option(o === 'true' ? 'sim' : 'não', o)));
+        ctrl.value = (val === 'true') ? 'true' : 'false';
+      } else if (typeOf(k) === 'select') {
+        ctrl = document.createElement('select');
+        (entryOf(k)[3] || []).forEach(o => ctrl.add(new Option(o, o)));
+        ctrl.value = val;
+      } else {
+        ctrl = document.createElement('input'); ctrl.type = typeOf(k) === 'number' ? 'number' : 'text'; ctrl.value = val;
+      }
+      ctrl.dataset.key = k;
+      el.append(Object.assign(document.createElement('label'), { textContent: labelOf(k) }), ctrl);
+      wrap.append(el);
+    });
+    d.append(sum, wrap);
+    form.append(d);
+  });
+  if (!any) { const e = document.createElement('div'); e.className = 'muted small'; e.textContent = 'nenhuma configuração encontrada'; form.append(e); }
+}
+$('#cfgSearch').addEventListener('input', renderProps);
 $('#cfgReload').addEventListener('click', loadProps);
 $('#cfgSave').addEventListener('click', async () => {
   const updates = {};
@@ -288,18 +352,38 @@ $('#userAddForm').addEventListener('submit', async (e) => {
   loadUsers();
 });
 
-// ---- console (log ao vivo + comandos RCON, mesma tela) ----
+// ---- console (log ao vivo + comandos RCON, mesma tela, por servidor ativo) ----
 let logBuf = '';   // log do servidor (atualiza sozinho)
 let cmdBuf = '';   // comandos digitados + respostas (persistem entre refreshes)
+let logsGen = 0;   // descarta respostas antigas (troca de servidor)
+function logHighlight(text) {
+  return String(text).split('\n').map(line => {
+    let cls = '';
+    if (/\[(?:ERROR|FATAL)\]/i.test(line) || /Exception in|Caused by:|Internal Exception|Failed to|Can't keep up/i.test(line)) cls = 'log-err';
+    else if (/\[WARN\]/i.test(line) || /WARNING|deprecated/i.test(line)) cls = 'log-warn';
+    return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
+  }).join('\n');
+}
+let consolePinned = true;
 function renderConsole() {
   const el = $('#consoleOut'); if (!el) return;
-  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
   const parts = [];
-  if (logBuf) parts.push(logBuf);
-  if (cmdBuf) parts.push('──── comandos ────\n' + cmdBuf);
-  el.textContent = parts.join('\n') || '(sem logs)';
-  if (atBottom) el.scrollTop = el.scrollHeight;
+  if (logBuf) parts.push(logHighlight(logBuf));
+  if (cmdBuf) parts.push('──── comandos ────\n' + esc(cmdBuf));
+  el.innerHTML = parts.join('\n') || '(sem logs)';
+  const auto = !$('#autoScroll') || $('#autoScroll').checked;
+  if (auto && (consolePinned || atBottom)) el.scrollTop = el.scrollHeight;
 }
+$('#autoScroll').addEventListener('change', (e) => { if (e.currentTarget.checked) { consolePinned = true; const el = $('#consoleOut'); if (el) el.scrollTop = el.scrollHeight; } });
+{
+  const el = $('#consoleOut');
+  if (el) el.addEventListener('scroll', () => { const near = el.scrollHeight - el.scrollTop - el.clientHeight < 50; consolePinned = near; });
+}
+function consoleSrv(srv) {
+  const el = $('#consoleSrvName'); if (el) el.textContent = srv ? 'console: ' + srv : '';
+}
+function resetConsole() { logBuf = ''; cmdBuf = ''; logsGen++; consolePinned = true; $('#consoleOut').textContent = '(sem logs)'; }
 $('#rconForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const cmd = $('#rconIn').value.trim(); if (!cmd) return;
@@ -312,23 +396,65 @@ $('#rconForm').addEventListener('submit', async (e) => {
 });
 
 let logTimer;
-async function refreshLogs() {
-  if (!$('#autolog').checked) return;
+async function refreshLogs(force) {
+  if (!force && !$('#autolog').checked) return;
+  const g = ++logsGen;
   const { ok, data } = await api('/api/logs?lines=250');
-  if (ok) { logBuf = data.log || ''; renderConsole(); }
+  if (ok && g === logsGen) { logBuf = data.log || ''; renderConsole(); }
 }
-function startLogs() { refreshLogs(); clearInterval(logTimer); logTimer = setInterval(refreshLogs, 3000); }
+function startLogs() { clearInterval(logTimer); logTimer = setInterval(refreshLogs, 3000); refreshLogs(true); }
+
+async function copyLogs() {
+  const el = $('#consoleOut');
+  const text = (el && el.innerText.trim()) ? el.innerText : '(console vazio)';
+  let ok = false;
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; } } catch {}
+  if (!ok) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.append(ta); ta.focus(); ta.select();
+    try { ok = document.execCommand('copy'); } catch {}
+    ta.remove();
+  }
+  const btn = $('#btnCopyLogs');
+  if (btn) {
+    const old = btn.textContent;
+    btn.textContent = ok ? 'Copiado!' : 'Falha ao copiar';
+    btn.classList.toggle('ok', ok);
+    setTimeout(() => { if (btn) { btn.textContent = old; btn.classList.remove('ok'); } }, 2000);
+  }
+  toast(ok ? 'Logs copiados para a área de transferência' : 'Não foi possível copiar os logs', ok ? '' : 'err');
+}
+$('#btnCopyLogs').addEventListener('click', copyLogs);
 
 // ---- backups ----
 async function loadBackups() {
   const { data } = await api('/api/backups');
   const body = $('#bkBody'); body.innerHTML = '';
+  const used = $('#bkUsed');
+  if (used) used.textContent = data.totalMB ? `~${data.totalMB} MB usados em disco` : '';
   (data.backups || []).forEach(b => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${b.name}</td><td>${b.sizeMB} MB</td><td>${new Date(b.mtime).toLocaleString('pt-BR')}</td>`;
+    const dl = document.createElement('a'); dl.className = 'ghost sm'; dl.href = `/api/backups/download?server=${encodeURIComponent(currentServer)}&name=${encodeURIComponent(b.name)}`; dl.textContent = 'Baixar';
+    const rs = document.createElement('button'); rs.className = 'ghost sm danger'; rs.textContent = 'Restaurar';
+    rs.onclick = () => restoreBackup(b.name);
+    const act = document.createElement('td');
+    act.append(dl, ' ', rs);
+    tr.append(Object.assign(document.createElement('td'), { textContent: b.name }), Object.assign(document.createElement('td'), { textContent: b.sizeMB + ' MB' }), Object.assign(document.createElement('td'), { textContent: new Date(b.mtime).toLocaleString('pt-BR') }), act);
     body.append(tr);
   });
-  if (!(data.backups || []).length) body.innerHTML = '<tr><td colspan="3" class="muted">Nenhum backup ainda.</td></tr>';
+  if (!(data.backups || []).length) body.innerHTML = '<tr><td colspan="4" class="muted">Nenhum backup ainda.</td></tr>';
+}
+async function restoreBackup(name) {
+  const ok = await confirmDialog(`Restaurar "${name}"? O mundo atual será sobrescrito pelos arquivos do backup. Recomenda-se gerar um backup antes. O servidor precisa estar parado.`, { okText: 'Restaurar', danger: true });
+  if (!ok) return;
+  doRestore(name);
+}
+async function doRestore(name) {
+  $('#bkMsg').textContent = 'restaurando…';
+  const { ok, error } = await api('/api/backups/restore', { method: 'POST', body: JSON.stringify({ name }) });
+  $('#bkMsg').textContent = ok ? '✓ restaurado' : (error || 'erro ao restaurar');
+  setTimeout(() => $('#bkMsg').textContent = '', 5000);
 }
 $('#bkNow').addEventListener('click', async () => {
   $('#bkMsg').textContent = 'fazendo backup…'; $('#bkNow').disabled = true;
@@ -416,7 +542,7 @@ async function doSearch(offset) {
   const off = typeof offset === 'number' ? offset : 0;
   const q = $('#searchIn').value.trim(), sort = $('#sortSelect').value;
   const box = $('#searchResults'); box.innerHTML = '<div class="muted small" style="padding:1rem">buscando…</div>';
-  const pgr = $('#searchPager'); if (pgr) pgr.innerHTML = '';
+  ['#searchPager', '#searchPagerTop'].forEach(s => { const x = $(s); if (x) x.innerHTML = ''; });
   const qs = `q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}&category=${encodeURIComponent(activeCat)}&offset=${off}`;
   const { ok, data } = await api('/api/content/search?' + qs);
   if (!ok) { box.innerHTML = `<div class="err small" style="padding:1rem">${esc(data.error || 'erro')}</div>`; return; }
@@ -425,15 +551,9 @@ async function doSearch(offset) {
   renderPager(data.total || 0, data.offset || 0, data.limit || 24);
 }
 function renderPager(total, offset, limit) {
-  const box = $('#searchPager'); if (!box) return; box.innerHTML = '';
-  if (total <= limit) return;
-  const page = Math.floor(offset / limit) + 1, pages = Math.ceil(total / limit);
-  const prev = document.createElement('button'); prev.className = 'ghost sm'; prev.textContent = '◀ Anterior'; prev.disabled = offset <= 0;
-  prev.onclick = () => { doSearch(Math.max(0, offset - limit)); $('#searchResults').scrollIntoView({ block: 'nearest' }); };
-  const info = document.createElement('span'); info.className = 'muted small'; info.textContent = `página ${page} de ${pages} · ${total} resultados`;
-  const next = document.createElement('button'); next.className = 'ghost sm'; next.textContent = 'Próxima ▶'; next.disabled = page >= pages;
-  next.onclick = () => { doSearch(offset + limit); $('#searchResults').scrollIntoView({ block: 'nearest' }); };
-  box.append(prev, info, next);
+  const go = (o) => { doSearch(o); $('#searchResults').scrollIntoView({ block: 'nearest' }); };
+  renderPagerInto('#searchPagerTop', total, offset, limit, go);
+  renderPagerInto('#searchPager', total, offset, limit, go);
 }
 function storeCard(r) {
   const el = document.createElement('div'); el.className = 'store-card';
@@ -514,12 +634,21 @@ async function openModal(slug, title) {
 }
 
 // ---- instalados ----
-async function loadInstalled() {
-  const { data } = await api('/api/content/installed');
+let installedItems = [];
+function renderInstalledList() {
   const box = $('#installedList'); box.innerHTML = '';
-  const items = (data && data.items) || [];
-  if (!items.length) { box.innerHTML = '<div class="muted small">nenhum mod/plugin instalado ainda.</div>'; return; }
-  items.forEach(it => {
+  const q = ($('#instFilter') || {}).value || '';
+  const query = q.trim().toLowerCase();
+  const list = query
+    ? installedItems.filter(it => (it.title || '').toLowerCase().includes(query) || (it.slug || '').toLowerCase().includes(query))
+    : installedItems;
+  if (!list.length) {
+    box.innerHTML = query
+      ? `<div class="muted small">nada instalado com "${esc(query)}"</div>`
+      : '<div class="muted small">nenhum mod/plugin instalado ainda.</div>';
+    return;
+  }
+  list.forEach(it => {
     const upd = it.slug && updatesMap[it.slug];
     const el = document.createElement('div'); el.className = 'inst-row' + (it.disabled ? ' off' : '');
     el.innerHTML = `
@@ -547,6 +676,12 @@ async function loadInstalled() {
     box.append(el);
   });
 }
+async function loadInstalled() {
+  const { data } = await api('/api/content/installed');
+  installedItems = (data && data.items) || [];
+  renderInstalledList();
+}
+$('#instFilter').addEventListener('input', renderInstalledList);
 $('#searchForm').addEventListener('submit', (e) => { e.preventDefault(); doSearch(); });
 $('#sortSelect').addEventListener('change', doSearch);
 $('#reloadInstalled').addEventListener('click', loadInstalled);
@@ -591,7 +726,7 @@ $('#authBtn').addEventListener('click', async () => {
 $('#serverSelect').addEventListener('change', (e) => switchServer(e.target.value));
 $('#serverManage').addEventListener('click', () => { $('#srvOverlay').hidden = false; renderServerManager(); });
 $('#serversManage').addEventListener('click', () => { $('#srvOverlay').hidden = false; renderServerManager(); });
-$('#tabServers').addEventListener('click', loadServers);
+const ts = $('#tabServers'); if (ts) ts.addEventListener('click', loadServers);
 $('#srvClose').addEventListener('click', () => $('#srvOverlay').hidden = true);
 $('#srvOverlay').addEventListener('click', (e) => { if (e.target === $('#srvOverlay')) $('#srvOverlay').hidden = true; });
 // ---- tela de carregamento (install de servidor/modpack) ----
@@ -643,12 +778,6 @@ $('#srvCreateForm').addEventListener('submit', async (e) => {
 });
 
 // ---- bindings modpack ----
-document.querySelectorAll('.srv-tab').forEach(t => t.addEventListener('click', () => {
-  document.querySelectorAll('.srv-tab').forEach(x => x.classList.remove('active'));
-  t.classList.add('active');
-  const mode = t.dataset.mode;
-  document.querySelectorAll('#srvOverlay [data-panel]').forEach(p => { p.hidden = p.dataset.panel !== mode; });
-}));
 function mpCard(r) {
   const el = document.createElement('div'); el.className = 'store-card';
   const tags = (r.categories || []).slice(0, 3).map(c => `<span class="tag">${esc(catLabel(c))}</span>`).join('');
@@ -662,19 +791,85 @@ function mpCard(r) {
       <button class="ok sm btn-mp-create">Criar servidor</button></div>`;
   el.querySelector('.btn-mp-create').onclick = async (ev) => {
     const btn = ev.currentTarget; // capturar antes do await (depois vira null)
-    if (!await confirmDialog(`Criar um servidor a partir de "${r.title}"?\n\nBaixa todos os mods do pack (de segundos a alguns minutos, dependendo do tamanho).`, { okText: 'Criar' })) return;
-    btn.disabled = true; btn.textContent = 'instalando…';
-    const name = $('#mpName').value.trim();
-    showLoading('Instalando "' + r.title + '"…', true);
-    const { ok, data } = await api('/api/servers/create-modpack', { method: 'POST', body: JSON.stringify({ slug: r.slug, name }) });
-    hideLoading();
-    btn.disabled = false; btn.textContent = 'Criar servidor';
-    if (!ok) { toast(data.error || 'falha ao criar', 'err'); return; }
-    const strip = (data.server.strippedMods || []).length;
-    toast('Modpack instalado: ' + data.server.name + ' — porta ' + data.server.port + (strip ? ` · ${strip} mods client-only desativados` : ''));
-    await loadServers(); renderServerManager();
+    const { ok, data } = await api('/api/modpacks/versions?slug=' + encodeURIComponent(r.slug));
+    const versions = (ok && data.versions) || [];
+    if (versions.length <= 1) {
+      if (!await confirmDialog(`Criar um servidor a partir de "${r.title}"?\n\nBaixa todos os mods do pack (de segundos a alguns minutos, dependendo do tamanho).`, { okText: 'Criar' })) return;
+      return doMpCreate(r, versions[0] && versions[0].id, '', btn);
+    }
+    const pick = await mpPickVersion(r, versions);
+    if (!pick) return; // cancelado
+    doMpCreate(r, pick.version.id, pick.name, btn);
   };
   return el;
+}
+
+// seletor de versão do modpack (reusa o modal de versões da loja de mods)
+function mpPickVersion(r, versions) {
+  return new Promise((resolve) => {
+    const ov = $('#modOverlay'), body = $('#modBody');
+    const def = versions.find(v => v.versionType === 'release') || versions[0];
+    const groups = {};
+    versions.forEach(v => { const mc = (v.gameVersions && v.gameVersions[0]) || '?'; (groups[mc] = groups[mc] || []).push(v); });
+    const opts = Object.keys(groups).sort().reverse().map(mc =>
+      `<optgroup label="MC ${esc(mc)}">${groups[mc].map(v =>
+        `<option value="${esc(v.id)}">${esc(v.versionNumber)}${v.loaders && v.loaders[0] ? ' · ' + esc(v.loaders[0]) : ''} · ${esc(v.versionType)}${v.datePublished ? ' · ' + esc(v.datePublished.slice(0, 10)) : ''}</option>`).join('')}</optgroup>`).join('');
+    body.innerHTML = `
+      <div class="mod-head">
+        ${iconHtml(r.icon, r.title)}
+        <div style="min-width:0">
+          <div class="mod-title">${esc(r.title)}</div>
+          <div class="muted small">⬇ ${fmtNum(r.downloads)}${r.author ? ' · por ' + esc(r.author) : ''}</div>
+        </div>
+      </div>
+      <p class="muted small">${esc((r.description || '').slice(0, 180))}</p>
+      <div class="ver-row">
+        <label class="muted small" style="flex:1;display:flex;flex-direction:column;gap:.3rem">
+          <span>Escolha a versão do modpack</span>
+          <select id="mpVerSel">${opts || '<option value="">— sem versões —</option>'}</select>
+        </label>
+      </div>
+      <input type="text" id="mpNameModal" placeholder="Nome do servidor (opcional — usa o nome do pack)" style="width:100%;margin-top:.9rem">
+      <div id="mpVerInfo" class="muted small" style="margin-top:.5rem"></div>
+      <div class="ver-row" style="margin-top:1rem">
+        <button class="ghost" id="mpVerCancel" style="flex:1">Cancelar</button>
+        <button class="ok" id="mpVerCreate">Criar servidor</button>
+      </div>`;
+    ov.hidden = false;
+    const sel = $('#mpVerSel'), info = $('#mpVerInfo');
+    const describe = (v) => {
+      if (!v) { info.textContent = ''; return; }
+      const bits = [];
+      if (v.loaders && v.loaders.length) bits.push('loader: ' + v.loaders.join(', '));
+      if (v.gameVersions && v.gameVersions.length) bits.push('MC ' + v.gameVersions.join(', '));
+      if (v.versionType) bits.push(v.versionType);
+      if (v.datePublished) bits.push(v.datePublished.slice(0, 10));
+      info.textContent = bits.join(' · ');
+    };
+    if (sel) { sel.value = def.id; describe(versions.find(v => v.id === sel.value) || def); sel.onchange = () => describe(versions.find(v => v.id === sel.value)); }
+    const done = (v) => { ov.hidden = true; body.innerHTML = ''; document.removeEventListener('keydown', onKey); ov.removeEventListener('click', onClick); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') done(null); };
+    const onClick = (e) => { if (e.target === ov) done(null); };
+    document.addEventListener('keydown', onKey);
+    ov.addEventListener('click', onClick);
+    $('#mpVerCancel').onclick = () => done(null);
+    $('#mpVerCreate').onclick = () => done({ version: versions.find(v => v.id === sel.value), name: $('#mpNameModal').value.trim() });
+  });
+}
+
+async function doMpCreate(r, versionId, name, btn) {
+  btn.disabled = true; btn.textContent = 'instalando…';
+  showLoading('Instalando "' + r.title + '"…', true);
+  const { ok, data } = await api('/api/servers/create-modpack', { method: 'POST', body: JSON.stringify({ slug: r.slug, name, versionId }) });
+  hideLoading();
+  btn.disabled = false; btn.textContent = 'Criar servidor';
+  if (!ok) { toast(data.error || 'falha ao criar', 'err'); return; }
+  const strip = (data.server.strippedMods || []).length;
+  toast('Modpack instalado: ' + data.server.name + ' — porta ' + data.server.port + (strip ? ` · ${strip} mods client-only desativados` : ''));
+  await loadServers(); renderServerManager();
+  const st = $('#tabServers');
+  if (st && !st.hidden) st.click();
+  else { const pi = document.querySelector('.side-nav .tab[data-tab="painel"]'); if (pi) pi.click(); }
 }
 function renderPagerInto(sel, total, offset, limit, go) {
   const box = $(sel); if (!box) return; box.innerHTML = '';
@@ -691,14 +886,18 @@ async function doMpSearch(offset) {
   const off = typeof offset === 'number' ? offset : 0;
   const q = $('#mpSearch').value.trim(), loader = $('#mpLoader').value;
   const box = $('#mpResults'); box.innerHTML = '<div class="muted small" style="padding:1rem">buscando…</div>';
-  const pgr = $('#mpPager'); if (pgr) pgr.innerHTML = '';
+  ['#mpPager', '#mpPagerTop'].forEach(s => { const x = $(s); if (x) x.innerHTML = ''; });
+  const info = $('#mpInfo'); if (info) info.textContent = '—';
   const { ok, data } = await api(`/api/modpacks/search?q=${encodeURIComponent(q)}&loader=${encodeURIComponent(loader)}&offset=${off}`);
   if (!ok) { box.innerHTML = `<div class="err small" style="padding:1rem">${esc(data.error || 'erro')}</div>`; return; }
-  if (!data.results || !data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; return; }
+  if (!data.results || !data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; if (info) info.textContent = '0'; return; }
+  if (info) info.textContent = `${data.total || 0} resultado(s)`;
   box.innerHTML = ''; data.results.forEach(r => box.append(mpCard(r)));
+  renderPagerInto('#mpPagerTop', data.total || 0, data.offset || 0, data.limit || 24, doMpSearch);
   renderPagerInto('#mpPager', data.total || 0, data.offset || 0, data.limit || 24, doMpSearch);
 }
 $('#mpSearchForm').addEventListener('submit', (e) => { e.preventDefault(); doMpSearch(0); });
+$('#mpLoader').addEventListener('change', () => doMpSearch(0));
 
 // ---- integrações / rede (playit / tailscale / cloudflare) ----
 function intgPill(on) { return `<span class="status-pill"><span class="dot ${on ? 'on' : 'idle'}"></span>${on ? 'ativo' : 'parado'}</span>`; }
@@ -706,6 +905,14 @@ async function intgAction(name, action) { return api('/api/integrations/' + acti
 async function loadIntegrations() { const { ok, data } = await api('/api/integrations'); if (ok) renderIntegrations(data); }
 function renderIntegrations(d) {
   const box = $('#intgList'); if (!box) return; box.innerHTML = '';
+  const srv = d.server;
+  if (srv) {
+    const note = document.createElement('div');
+    note.className = 'muted small';
+    note.style.cssText = 'margin:.2rem 0 .6rem';
+    note.textContent = `Túneis configurados para o servidor ${srv.name || srv.id}${srv.port ? ' (porta ' + srv.port + ')' : ''}. Ao trocar de servidor, o status e o endereço abaixo passam a ser do servidor selecionado.`;
+    box.append(note);
+  }
 
   // ---- playit ----
   {
@@ -713,15 +920,18 @@ function renderIntegrations(d) {
     let body = '';
     if (!p.installed) body = `<button class="ok sm act" data-a="install">Instalar</button>`;
     else if (!p.hasSecret) {
-      body = `<div class="intg-note">Crie um agente em <a href="https://playit.gg" target="_blank" rel="noopener">playit.gg</a> (Account → Agents → <b>self-managed</b>), copie o <b>secret key</b> e cole aqui:</div>
+      body = `<div class="intg-note">Crie um agente em <a href="https://playit.gg" target="_blank" rel="noopener">playit.gg</a> (Account → Agents → <b>self-managed</b>), copie o <b>secret key</b> e cole aqui (fica salvo só pra este servidor):</div>
         <div class="row" style="margin-top:.5rem"><input type="password" class="pl-secret" placeholder="secret key do playit.gg" style="flex:1"><button class="ghost sm act" data-a="secret">Salvar</button></div>`;
     } else if (!p.running) body = `<button class="ok sm act" data-a="start">Ligar túnel</button>`;
     else {
-      if (p.address) body += `<div class="intg-note ok">Endereço público: <code>${esc(p.address)}</code> — é esse que os amigos usam no Minecraft.</div>`;
+      if (p.address) body += `<div class="intg-note ok">Endereço público: <code>${esc(p.address)}</code> — é esse que os amigos usam no Minecraft (porta no painel do playit.gg).</div>`;
       else body += `<div class="muted small">túnel no ar. Configure a porta no painel do playit.gg; o endereço aparece aqui (clique em Atualizar).</div>`;
       body += `<div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desligar</button></div>`;
     }
-    el.innerHTML = `<div class="intg-head"><div class="intg-ic"><img src="/logos/playit.svg" alt=""></div><div class="intg-meta"><div class="intg-title">playit.gg</div><div class="muted small">Servidor público sem abrir porta no roteador (túnel TCP). Ideal pra Minecraft.</div></div>${intgPill(p.running)}</div><div class="intg-body">${body}</div>`;
+    body += `<label class="muted small" style="display:block;margin-top:.6rem"><input type="checkbox" class="pl-onstart"${p.onStart ? ' checked' : ''}> iniciar o túnel junto quando eu ligar este servidor</label>`;
+    el.innerHTML = `<div class="intg-head"><div class="intg-ic"><img src="/logos/playit.svg" alt=""></div><div class="intg-meta"><div class="intg-title">playit.gg</div><div class="muted small">Servidor público sem abrir porta no roteador (túnel TCP). Ideal pra Minecraft. Este túnel é <b>deste servidor</b>.</div></div>${intgPill(p.running)}</div><div class="intg-body">${body}</div>`;
+    const os = el.querySelector('.pl-onstart');
+    if (os) os.onchange = async (e) => { const r = await api('/api/integrations/playit-conf', { method: 'POST', body: JSON.stringify({ onStart: e.currentTarget.checked }) }); toast(r.ok ? (e.currentTarget.checked ? 'Túnel ligará junto com o servidor.' : 'Túnel não ligará mais junto.') : (r.data.error || 'erro')); if (!r.ok) { e.currentTarget.checked = !e.currentTarget.checked; } };
     el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
       const a = ev.currentTarget.dataset.a;
       if (a === 'secret') { const s = el.querySelector('.pl-secret').value.trim(); if (!s) return; const r = await api('/api/integrations/playit-secret', { method: 'POST', body: JSON.stringify({ secret: s }) }); toast(r.ok ? 'Secret salvo — agora ligue o túnel.' : (r.data.error || 'erro')); return loadIntegrations(); }

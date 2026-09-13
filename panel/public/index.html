@@ -45,17 +45,19 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         <span class="lbl">Painel</span>
       </button>
-      <button class="tab" data-tab="servers" id="tabServers" hidden>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="1.5"/><rect x="2" y="14" width="20" height="7" rx="1.5"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
-        <span class="lbl">Servidores</span>
-      </button>
-      <button class="tab" data-tab="config">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-        <span class="lbl">Configuração</span>
+      <div class="side-pair">
+      <button class="tab" data-tab="modpacks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+        <span class="lbl">Modpacks</span>
       </button>
       <button class="tab" data-tab="conteudo">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.89 1.45l8 4A2 2 0 0 1 22 7.24v9.53a2 2 0 0 1-1.11 1.79l-8 4a2 2 0 0 1-1.79 0l-8-4a2 2 0 0 1-1.1-1.8V7.24a2 2 0 0 1 1.11-1.79l8-4a2 2 0 0 1 1.78 0z"/><polyline points="2.32 6.16 12 11 21.68 6.16"/><line x1="12" y1="22.76" x2="12" y2="11"/></svg>
-        <span class="lbl">Conteúdo</span>
+        <span class="lbl">Mods</span>
+      </button>
+    </div>
+      <button class="tab" data-tab="config">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        <span class="lbl">Configuração</span>
       </button>
       <button class="tab" data-tab="compat">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
@@ -179,17 +181,39 @@
             <div class="sub" id="speedMeta">clique para testar</div>
           </div>
         </div>
-      </section>
 
-      <!-- ============ SERVIDORES (visão geral) ============ -->
-      <section id="servers" class="panel" hidden>
-        <div class="card">
+        <div class="card" style="margin-top:1.4rem">
           <div class="row spread">
             <h3>Servidores</h3>
             <button id="serversManage" class="ghost sm">⚙ Gerenciar</button>
           </div>
-          <p class="muted small" style="margin-top:.6rem">Todas as instâncias. Ligue <b>uma de cada vez</b> (hardware fraco). Clique em Selecionar pra abrir uma no Painel.</p>
+          <p class="muted small" style="margin-top:.6rem" id="serversHint">Instâncias disponíveis. Por limitações de hardware, execute apenas um servidor por vez. Clique em "Selecionar" para gerenciar no painel acima.</p>
           <div id="serversGrid" class="store-grid"></div>
+        </div>
+      </section>
+
+      <!-- ============ MODPACKS ============ -->
+      <section id="modpacks" class="panel" hidden>
+        <div class="card">
+          <div class="row spread">
+            <h3>Loja de modpacks</h3>
+            <span class="muted small" id="mpInfo">—</span>
+          </div>
+          <p class="muted small" style="margin-top:.6rem">Busca no <b>Modrinth</b> e já cria o servidor com todos os mods do pack instalados de uma vez. Cada jogador precisa instalar o <b>mesmo pack</b> no cliente (Prism Launcher / Modrinth App); o painel mostra o link pra compartilhar depois.</p>
+          <form id="mpSearchForm" class="content-toolbar">
+            <input type="text" id="mpSearch" placeholder="buscar modpack (ex: cobblemon, all the mods, better mc)">
+            <select id="mpLoader" title="Loader">
+              <option value="">Todos os loaders</option>
+              <option value="fabric">Fabric</option>
+              <option value="quilt">Quilt</option>
+              <option value="forge">Forge</option>
+              <option value="neoforge">NeoForge</option>
+            </select>
+            <button type="submit" class="ok">Buscar</button>
+          </form>
+          <div id="mpPagerTop" class="pager"></div>
+          <div id="mpResults" class="store-grid"></div>
+          <div id="mpPager" class="pager"></div>
         </div>
       </section>
 
@@ -225,7 +249,8 @@
               <button id="cfgSave" class="ok">Salvar</button>
             </div>
           </div>
-          <p class="muted small" style="margin-top:.6rem">Após salvar, reinicie o servidor pra aplicar. Campos comuns aparecem primeiro.</p>
+          <p class="muted small" style="margin-top:.6rem">Após salvar, reinicie o servidor pra aplicar. As configurações ficam agrupadas por seção.</p>
+          <input type="search" id="cfgSearch" placeholder="filtrar configurações (ex: port, motd, jogadores)…" style="width:100%;margin-top:.6rem">
           <div id="propsForm" class="props"></div>
           <div id="cfgMsg" class="muted small"></div>
         </div>
@@ -251,6 +276,7 @@
             <button type="submit" class="ok">Buscar</button>
           </form>
           <div id="catChips" class="chips"></div>
+          <div id="searchPagerTop" class="pager"></div>
           <div id="searchResults" class="store-grid"></div>
           <div id="searchPager" class="pager"></div>
         </div>
@@ -263,6 +289,7 @@
             </div>
           </div>
           <div id="updMsg" class="muted small" style="margin-top:.5rem"></div>
+          <input type="search" id="instFilter" placeholder="filtrar instalados (nome ou slug)…" style="width:100%;margin-top:.6rem">
           <div id="installedList" style="margin-top:1rem"></div>
         </div>
       </section>
@@ -318,7 +345,12 @@
               <button type="button" class="con-tab active" data-con="mc">Servidor (Minecraft)</button>
               <button type="button" class="con-tab" data-con="audit">Histórico</button>
             </div>
-            <label class="muted small" id="autologWrap"><input type="checkbox" id="autolog" checked style="vertical-align:middle"> log ao vivo</label>
+            <div class="row" style="gap:.6rem;align-items:center">
+              <span class="muted small" id="consoleSrvName" title="Servidor ao qual o console está vinculado"></span>
+              <button type="button" id="btnCopyLogs" class="ghost sm" title="Copiar todo o conteúdo do console para a área de transferência">Copiar Logs</button>
+              <label class="muted small" title="Segue a última linha quando novos logs chegam"><input type="checkbox" id="autoScroll" checked style="vertical-align:middle"> auto-scroll</label>
+              <label class="muted small" id="autologWrap"><input type="checkbox" id="autolog" checked style="vertical-align:middle"> log ao vivo</label>
+            </div>
           </div>
 
           <div data-con-panel="mc">
@@ -349,10 +381,13 @@
         <div class="card">
           <div class="row spread">
             <h3>Backups do mundo</h3>
-            <button id="bkNow" class="ok">Fazer backup agora</button>
+            <div class="row" style="margin:0;align-items:center">
+              <span id="bkUsed" class="muted small"></span>
+              <button id="bkNow" class="ok">Fazer backup agora</button>
+            </div>
           </div>
           <div id="bkMsg" class="muted small" style="margin-top:.6rem"></div>
-          <table class="tbl"><thead><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th></tr></thead>
+          <table class="tbl"><thead><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th><th>Ações</th></tr></thead>
             <tbody id="bkBody"></tbody></table>
         </div>
       </section>
@@ -373,13 +408,9 @@
     <div class="modal-card">
       <button id="srvClose" class="modal-x" aria-label="Fechar">✕</button>
       <div class="mod-title" style="margin-bottom:.3rem">Servidores</div>
-      <p class="muted small">Crie, clone ou apague servidores. Com a RAM atual, o ideal é manter <b>um rodando por vez</b>.</p>
-      <div class="srv-tabs">
-        <button type="button" class="srv-tab active" data-mode="clean">Servidor limpo</button>
-        <button type="button" class="srv-tab" data-mode="modpack">A partir de modpack</button>
-      </div>
+      <p class="muted small">Crie, clone ou apague servidores. Com a RAM atual, o ideal é manter <b>um rodando por vez</b>. Modpacks ficam na aba <b>Modpacks</b> do menu.</p>
 
-      <form id="srvCreateForm" class="srv-create" data-panel="clean">
+      <form id="srvCreateForm" class="srv-create">
         <input type="text" id="srvName" placeholder="Nome (ex: Survival dos amigos)" required>
         <select id="srvLoader">
           <option value="paper">Paper (plugins, leve)</option>
@@ -389,24 +420,6 @@
         <input type="text" id="srvVersion" placeholder="Versão (opcional, ex: 1.21.1)">
         <button type="submit" id="srvCreateBtn" class="ok">Criar servidor</button>
       </form>
-
-      <div id="mpPanel" data-panel="modpack" hidden>
-        <input type="text" id="mpName" placeholder="Nome do servidor (opcional — usa o nome do pack)" style="width:100%;margin-bottom:.5rem">
-        <form id="mpSearchForm" class="content-toolbar">
-          <input type="text" id="mpSearch" placeholder="buscar modpack (ex: cobblemon, all the mods, better mc)">
-          <select id="mpLoader" title="Loader">
-            <option value="">Todos os loaders</option>
-            <option value="fabric">Fabric</option>
-            <option value="quilt">Quilt</option>
-            <option value="forge">Forge</option>
-            <option value="neoforge">NeoForge</option>
-          </select>
-          <button type="submit" class="ok">Buscar</button>
-        </form>
-        <p class="muted small" style="margin-top:.5rem">⚠ Cada jogador precisa instalar o <b>mesmo modpack</b> no cliente (Prism Launcher / Modrinth App). Depois de criar, o painel mostra o link do pack pra você compartilhar.</p>
-        <div id="mpResults" class="store-grid"></div>
-        <div id="mpPager" class="pager"></div>
-      </div>
 
       <h3 style="margin-top:1.2rem">Existentes</h3>
       <div id="srvList" style="margin-top:.6rem"></div>
