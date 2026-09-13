@@ -1,0 +1,10 @@
+#!/bin/sh
+# Executado no lugar de /usr/bin/java dentro do container.
+# O painel (runner exec) define CRAFTBOX_JAVA_MAJOR=8|17|21 por instância,
+# conforme a versão do Minecraft (meta mcVersion). Sem isso, cai no JDK 17.
+case "${CRAFTBOX_JAVA_MAJOR:-17}" in
+  8)  J="/usr/local/lib/jvm/jdk8/bin/java" ;;
+  21) J="/usr/local/lib/jvm/jdk21/bin/java" ;;
+  17|*) J="/usr/local/lib/jvm/jdk17/bin/java" ;;
+esac
+exec "$J" "$@"

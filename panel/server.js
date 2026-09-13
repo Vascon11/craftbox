@@ -19,7 +19,7 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
 const ROOT = __dirname;
@@ -44,7 +44,8 @@ const DEFAULT_CONFIG = {
   serviceTemplate: 'minecraft@',                           // unit systemd template; servico = serviceTemplate + <id>
   activeServer: '',                                        // instancia selecionada no painel (multi)
   systemctlUser: false,                                    // true = usa 'systemctl --user' (rootless, sem sudo)
-  integrationsDir: ''                                      // onde ficam os binarios das integracoes (playit/cloudflared); vazio = auto
+  integrationsDir: '',                                     // onde ficam os binarios das integracoes (playit/cloudflared); vazio = auto
+  runDir: ''                                               // (modo container) PID files/logs dos processos gerenciados; vazio = auto
 };
 
 function loadConfig() {
@@ -53,6 +54,11 @@ function loadConfig() {
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
     cfg = { ...cfg, ...raw, rcon: { ...cfg.rcon, ...(raw.rcon || {}) }, auth: { ...cfg.auth, ...(raw.auth || {}) } };
   } catch { /* usa defaults */ }
+  // overrides por ambiente (Docker/Compose) — caminhos e porta
+  if (process.env.CRAFTBOX_SERVERS_DIR) cfg.serversDir = process.env.CRAFTBOX_SERVERS_DIR;
+  if (process.env.CRAFTBOX_INTEGRATIONS_DIR) cfg.integrationsDir = process.env.CRAFTBOX_INTEGRATIONS_DIR;
+  if (process.env.CRAFTBOX_RUN_DIR) cfg.runDir = process.env.CRAFTBOX_RUN_DIR;
+  if (process.env.CRAFTBOX_PORT) { const p = parseInt(process.env.CRAFTBOX_PORT, 10); if (p > 0) cfg.port = p; }
   if (!cfg.sessionSecret) {
     cfg.sessionSecret = crypto.randomBytes(32).toString('hex');
     try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2)); } catch {}
@@ -195,7 +201,113 @@ function run(cmd, args, opts = {}) {
 }
 // argumentos do systemctl (prefixa --user no modo rootless)
 function scArgs(rest) { return CONFIG.systemctlUser ? ['--user', ...rest] : rest; }
+
+// ---------------------------------------------------------------------------
+// Runner de processos (modo container / sem systemd).
+// Com `CRAFTBOX_RUNNER=exec` (ou quando não existe systemd no ambiente) o painel
+// GERENCIA os servidores Minecraft e os túneis diretamente via child_process,
+// com PID files/logs em `runDir`. É o que permite rodar tudo no Docker sem
+// depender do systemd nem do Docker socket. Nos hosts físicos (systemd) o
+// comportamento original via systemctl é mantido intacto.
+// ---------------------------------------------------------------------------
+const EXEC_RUNNER = process.env.CRAFTBOX_RUNNER === 'exec' || !fs.existsSync('/run/systemd/system');
+function runDir() {
+  const base = CONFIG.runDir || (CONFIG.serversDir ? path.join(path.dirname(CONFIG.serversDir), 'craftbox-run') : path.join(os.homedir(), '.craftbox-run'));
+  try { fs.mkdirSync(base, { recursive: true }); } catch {}
+  return base;
+}
+function runUnitFile(unit) { return path.join(userUnitDir(), path.basename(unit) + '.service'); }
+function runPidFile(unit) { return path.join(runDir(), path.basename(unit) + '.pid'); }
+function runLogFile(unit) { return path.join(runDir(), path.basename(unit) + '.log'); }
+function runInfo(unit) {
+  try { const ln = fs.readFileSync(runPidFile(unit), 'utf8').trim().split('\n'); return { pid: +ln[0] || 0, startedAt: +ln[1] || 0 }; }
+  catch { return { pid: 0, startedAt: 0 }; }
+}
+function procAlive(pid) { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } }
+function unitActive(unit) { return procAlive(runInfo(unit).pid) ? 'active' : 'inactive'; }
+const execChildren = new Map();
+function unitExecFor(unit) {
+  unit = path.basename(unit);
+  // servidor Minecraft: usa o start.sh da instancia (o script ja faz cd e exec do java)
+  if (CONFIG.serviceTemplate && unit.startsWith(CONFIG.serviceTemplate)) {
+    const id = unit.slice(CONFIG.serviceTemplate.length);
+    const dir = multiEnabled() ? path.join(CONFIG.serversDir, id) : CONFIG.mcDir;
+    if (fs.existsSync(path.join(dir, 'start.sh'))) return { cmd: 'bash start.sh', cwd: dir };
+    return { cmd: null, cwd: dir };
+  }
+  if (unit === CONFIG.service) return { cmd: fs.existsSync(path.join(CONFIG.mcDir, 'start.sh')) ? 'bash start.sh' : null, cwd: CONFIG.mcDir };
+  // túneis/integrações: usa o ExecStart do arquivo de unidade gerado pelo painel
+  try {
+    const content = fs.readFileSync(runUnitFile(unit), 'utf8');
+    const m = content.match(/^ExecStart=(.*)$/m);
+    if (m && m[1].trim()) return { cmd: m[1].trim(), cwd: integrationsDir() };
+  } catch {}
+  return { cmd: null, cwd: process.cwd() };
+}
+function javaForMc(ver) {
+  const m = /^1\.(\d+)/.exec(String(ver || ''));
+  if (m) { const v = +m[1]; if (v >= 21) return 21; if (v >= 17) return 17; return 8; }
+  return 17;
+}
+function spawnUnit(unit, spec) {
+  unit = path.basename(unit);
+  const logPath = runLogFile(unit);
+  const stream = fs.createWriteStream(logPath, { flags: 'a' });
+  const env = { ...process.env };
+  if (spec.java) env.CRAFTBOX_JAVA_MAJOR = String(spec.java); // o wrapper 'java' escolhe a JDK certa
+  const child = spawn('/bin/bash', ['-lc', spec.cmd], { cwd: spec.cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env });
+  child.stdout.pipe(stream); child.stderr.pipe(stream);
+  try { fs.writeFileSync(runPidFile(unit), child.pid + '\n' + Date.now() + '\n'); } catch {}
+  execChildren.set(unit, { child, stream });
+  child.on('exit', () => { try { stream.end(); } catch {} execChildren.delete(unit); try { fs.unlinkSync(runPidFile(unit)); } catch {} });
+  child.unref();
+  return child;
+}
+async function unitStop(unit) {
+  const { pid } = runInfo(unit);
+  if (!pid || !procAlive(pid)) return { code: 0, stdout: '', stderr: '' }; // idempotente, como o systemd
+  try { process.kill(pid, 'SIGTERM'); } catch {}
+  const wait = new Promise(r => { let n = 0; const iv = setInterval(() => { n++; if (!procAlive(pid) || n > 24) { clearInterval(iv); r(); } }, 500); });
+  await wait;
+  if (procAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+  return { code: 0, stdout: '', stderr: '' };
+}
+async function unitStart(unit) {
+  if (unitActive(unit) === 'active') return { code: 0, stdout: '', stderr: '' };
+  const spec = unitExecFor(unit);
+  if (!spec.cmd) return { code: 1, stdout: '', stderr: `sem comando de execução para a unidade ${unit} (falta start.sh ou o ExecStart da unidade)` };
+  spec.java = javaForMc(readInstanceMeta(spec.cwd).mcVersion);
+  spawnUnit(unit, spec);
+  return { code: 0, stdout: '', stderr: '' };
+}
+async function unitAction(action, unit) {
+  if (action === 'start') return unitStart(unit);
+  if (action === 'restart') { const was = unitActive(unit); await unitStop(unit); return was === 'active' ? unitStart(unit) : { code: 0, stdout: '', stderr: '' }; }
+  return unitStop(unit);
+}
+async function unitUptime(unit) { const { startedAt } = runInfo(unit); return startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : null; }
+function unitJournal(unit, lines) {
+  try {
+    const data = fs.readFileSync(runLogFile(unit), 'utf8');
+    return data.split('\n').slice(-(lines || 120)).join('\n') || '(sem logs)';
+  } catch { return '(sem logs)'; }
+}
+async function daemonReload() { if (EXEC_RUNNER) return { code: 0, stdout: '', stderr: '' }; return run('systemctl', ['--user', 'daemon-reload']); }
+async function autostartServers() {
+  if (!EXEC_RUNNER || !multiEnabled()) return;
+  const want = String(process.env.CRAFTBOX_AUTOSTART || '').split(',').map(s => s.trim()).filter(Boolean);
+  for (const id of listInstanceIds()) {
+    const meta = readInstanceMeta(path.join(CONFIG.serversDir, id));
+    if (!(want.length ? want.includes(id) : meta.autostart)) continue;
+    await als.run(serverCtx(id), async () => {
+      if (await svcActive() === 'active') return;
+      const r = await svcAction('start');
+      if (r.code === 0) { try { await maybeStartTunnels(); } catch {} }
+    });
+  }
+}
 async function svcActiveOf(service) {
+  if (EXEC_RUNNER) return unitActive(service);
   const r = await run('systemctl', scArgs(['is-active', service]));
   return r.stdout.trim() || 'unknown';
 }
@@ -203,6 +315,7 @@ async function svcActive() { return svcActiveOf(SRV().service); }
 async function svcAction(action, service) {
   if (!['start', 'stop', 'restart'].includes(action)) throw new Error('acao invalida');
   const svc = service || SRV().service;
+  if (EXEC_RUNNER) return unitAction(action, svc);
   // rootless: systemctl --user <action> <svc>  |  sistema: sudoers permitindo systemctl <action> <svc>
   const r = CONFIG.systemctlUser
     ? await run('systemctl', ['--user', action, svc])
@@ -210,6 +323,7 @@ async function svcAction(action, service) {
   return r;
 }
 async function svcUptime() {
+  if (EXEC_RUNNER) return unitUptime(SRV().service);
   const r = await run('systemctl', scArgs(['show', SRV().service, '--property=ActiveEnterTimestamp', '--value']));
   const t = Date.parse(r.stdout.trim());
   return isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 1000));
@@ -415,11 +529,15 @@ function detectLoader() {
   return hasMods ? 'fabric' : 'paper';
 }
 function contentFolder(loader) {
-  const dir = path.join(SRV().dir, loader === 'fabric' ? 'mods' : 'plugins');
+  const modsLike = ['fabric', 'quilt', 'forge', 'neoforge'];
+  const dir = path.join(SRV().dir, modsLike.includes(loader) ? 'mods' : 'plugins');
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
   return dir;
 }
-function loaderCategories(loader) { return loader === 'fabric' ? ['fabric'] : ['paper', 'spigot', 'bukkit']; }
+function loaderCategories(loader) {
+  if (['fabric', 'quilt', 'forge', 'neoforge'].includes(loader)) return [loader];
+  return ['paper', 'spigot', 'bukkit'];
+}
 function detectMcVersion() {
   const s = SRV();
   if (s.mcVersion) return s.mcVersion;
@@ -466,7 +584,9 @@ async function runPool(items, concurrency, worker) {
 }
 // loaders aceitos ao listar versoes de um projeto (mais amplo que a busca)
 function versionLoaders(loader) {
-  return loader === 'fabric' ? ['fabric', 'quilt'] : ['paper', 'purpur', 'spigot', 'bukkit', 'folia'];
+  if (loader === 'fabric') return ['fabric', 'quilt'];
+  if (['quilt', 'forge', 'neoforge'].includes(loader)) return [loader];
+  return ['paper', 'purpur', 'spigot', 'bukkit', 'folia'];
 }
 // nomes de "categorias" que na verdade sao loaders/ambiente — escondemos na UI
 const LOADER_TAGS = new Set(['fabric', 'quilt', 'forge', 'neoforge', 'paper', 'purpur', 'spigot', 'bukkit', 'folia', 'velocity', 'sponge', 'bungeecord', 'waterfall', 'datapack', 'client', 'server']);
@@ -1109,9 +1229,71 @@ function writeUserUnit(unit, desc, execStart) {
   const content = `[Unit]\nDescription=${desc}\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${execStart}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`;
   fs.writeFileSync(path.join(userUnitDir(), unit + '.service'), content);
 }
-async function uSvc(action, unit) { return run('systemctl', ['--user', action, unit]); }
-async function uActive(unit) { const r = await run('systemctl', ['--user', 'is-active', unit]); return (r.stdout || '').trim() || 'unknown'; }
-async function uJournal(unit, lines) { const r = await run('journalctl', ['--user', '-u', unit, '-n', String(lines || 120), '--no-pager', '-o', 'cat']); return r.stdout || ''; }
+async function uSvc(action, unit) {
+  if (EXEC_RUNNER) return unitAction(action, unit);
+  return run('systemctl', ['--user', action, unit]);
+}
+async function uActive(unit) {
+  if (EXEC_RUNNER) return unitActive(unit);
+  const r = await run('systemctl', ['--user', 'is-active', unit]);
+  return (r.stdout || '').trim() || 'unknown';
+}
+async function uJournal(unit, lines) {
+  if (EXEC_RUNNER) return unitJournal(unit, lines);
+  const r = await run('journalctl', ['--user', '-u', unit, '-n', String(lines || 120), '--no-pager', '-o', 'cat']);
+  return r.stdout || '';
+}
+// integracoes por servidor: cada instancia tem sua unidade e seu diretorio de
+// runtime (secret/token/socket) — o tunel liga EXATAMENTE o servidor selecionado.
+function intgSrvDir() {
+  const base = integrationsDir();
+  if (!multiEnabled()) return base;
+  const d = path.join(base, SRV().id);
+  try { fs.mkdirSync(d, { recursive: true }); } catch {}
+  return d;
+}
+function intgUnit(name) {
+  const base = name === 'playit' ? 'craftbox-playit' : name === 'cloudflare' ? 'craftbox-cloudflared' : null;
+  if (!base) return null;
+  return multiEnabled() ? `${base}-${SRV().id}` : base;
+}
+// liga os tuneis junto com o servidor (se a instancia tiver onStart)
+async function maybeStartPlayit() {
+  const meta = readInstanceMeta(SRV().dir);
+  if (!multiEnabled() || !meta.playitOnStart) return;
+  const dir = intgSrvDir();
+  const bin = path.join(integrationsDir(), 'playit');
+  const toml = path.join(dir, 'playit.toml');
+  if (!fs.existsSync(bin) || !fs.existsSync(toml)) return;
+  const u = intgUnit('playit');
+  if (!u) return;
+  let st = 'inactive'; try { st = await uActive(u); } catch {}
+  if (st === 'active') return;
+  try {
+    writeUserUnit(u, `craftbox — playit.gg agent (${SRV().name})`, `${bin} --secret-path ${toml} --socket-path ${path.join(dir, 'playit.sock')}`);
+    await daemonReload();
+    await uSvc('start', u);
+  } catch {}
+}
+async function maybeStartCloudflare() {
+  const meta = readInstanceMeta(SRV().dir);
+  if (!multiEnabled() || !meta.cfOnStart) return;
+  const dir = intgSrvDir();
+  const bin = path.join(integrationsDir(), 'cloudflared');
+  const tokFile = path.join(dir, 'cloudflared.token');
+  if (!fs.existsSync(bin) || !fs.existsSync(tokFile)) return;
+  const u = intgUnit('cloudflare');
+  if (!u) return;
+  let st = 'inactive'; try { st = await uActive(u); } catch {}
+  if (st === 'active') return;
+  try {
+    const token = fs.readFileSync(tokFile, 'utf8').trim();
+    writeUserUnit(u, `craftbox — Cloudflare Tunnel (${SRV().name})`, `${bin} tunnel --no-autoupdate run --token ${token}`);
+    await daemonReload();
+    await uSvc('start', u);
+  } catch {}
+}
+async function maybeStartTunnels() { try { await maybeStartPlayit(); } catch {} try { await maybeStartCloudflare(); } catch {} }
 const IARCH = os.arch() === 'arm64' ? 'aarch64' : 'amd64';
 const PLAYIT_URL = `https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-${IARCH}`;
 const CLOUDFLARED_URL = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${os.arch() === 'arm64' ? 'arm64' : 'amd64'}`;
@@ -1131,19 +1313,24 @@ function tsPermMsg(out) {
 
 async function integrationsStatus() {
   const dir = integrationsDir();
+  const srvDir = intgSrvDir();
   const playitBin = path.join(dir, 'playit');
   const cfBin = path.join(dir, 'cloudflared');
-  // playit (daemon roda com um secret key criado no playit.gg)
-  const playit = { installed: fs.existsSync(playitBin), hasSecret: fs.existsSync(path.join(dir, 'playit.toml')), running: false, address: null };
-  if (playit.installed && await uActive('craftbox-playit') === 'active') {
+  // playit (daemon roda com um secret key criado no playit.gg — por servidor)
+  const playit = { installed: fs.existsSync(playitBin), hasSecret: fs.existsSync(path.join(srvDir, 'playit.toml')), running: false, address: null, onStart: !!(readInstanceMeta(SRV().dir).playitOnStart) };
+  const ppu = intgUnit('playit');
+  if (playit.installed && ppu && await uActive(ppu) === 'active') {
     playit.running = true;
-    const log = await uJournal('craftbox-playit', 150);
+    const log = await uJournal(ppu, 150);
     const ad = log.match(/[a-z0-9-]+\.(?:craft\.)?playit\.gg(?::\d+)?|\d+\.tcp\.playit\.gg(?::\d+)?/i);
     if (ad) playit.address = ad[0];
   }
   // cloudflared
-  const cloudflare = { installed: fs.existsSync(cfBin), running: false, hasToken: fs.existsSync(path.join(dir, 'cloudflared.token')) };
-  if (cloudflare.installed && await uActive('craftbox-cloudflared') === 'active') cloudflare.running = true;
+  const cloudflare = { installed: fs.existsSync(cfBin), running: false, hasToken: fs.existsSync(path.join(srvDir, 'cloudflared.token')), hostname: '', onStart: !!(readInstanceMeta(SRV().dir).cfOnStart) };
+  let cfHost = ''; try { cfHost = (fs.readFileSync(path.join(srvDir, 'cloudflared.host'), 'utf8') || '').trim(); } catch {}
+  cloudflare.hostname = cfHost;
+  const cfU = intgUnit('cloudflare');
+  if (cloudflare.installed && cfU && await uActive(cfU) === 'active') cloudflare.running = true;
   // tailscale (binario do sistema)
   const tailscale = { installed: false, running: false, ip: null, state: '' };
   const tv = await run('tailscale', ['version']);
@@ -1152,7 +1339,7 @@ async function integrationsStatus() {
     const st = await run('tailscale', ['status', '--json']);
     if (st.code === 0) { try { const j = JSON.parse(st.stdout); tailscale.state = j.BackendState || ''; tailscale.running = j.BackendState === 'Running'; if (j.Self && j.Self.TailscaleIPs && j.Self.TailscaleIPs.length) tailscale.ip = j.Self.TailscaleIPs.find(x => x.includes('.')) || j.Self.TailscaleIPs[0]; } catch {} }
   }
-  return { dir, systemctlUser: CONFIG.systemctlUser, playit, cloudflare, tailscale };
+  return { dir, systemctlUser: CONFIG.systemctlUser, server: { id: SRV().id, name: SRV().name, port: SRV().port }, playit, cloudflare, tailscale };
 }
 async function integrationInstall(name) {
   const dir = integrationsDir();
@@ -1175,26 +1362,27 @@ async function integrationInstall(name) {
 }
 async function integrationStart(name) {
   const dir = integrationsDir();
+  const srvDir = intgSrvDir();
   if (name === 'playit') {
     const bin = path.join(dir, 'playit');
-    const toml = path.join(dir, 'playit.toml');
+    const toml = path.join(srvDir, 'playit.toml');
     if (!fs.existsSync(bin)) throw new Error('playit não instalado');
-    if (!fs.existsSync(toml)) throw new Error('cole o secret key do playit.gg primeiro');
-    writeUserUnit('craftbox-playit', 'craftbox — playit.gg agent', `${bin} --secret-path ${toml} --socket-path ${path.join(dir, 'playit.sock')}`);
-    await run('systemctl', ['--user', 'daemon-reload']);
-    const r = await uSvc('start', 'craftbox-playit');
+    if (!fs.existsSync(toml)) throw new Error(`cole o secret key do playit.gg primeiro (servidor ${SRV().name})`);
+    writeUserUnit(intgUnit('playit'), `craftbox — playit.gg agent (${SRV().name})`, `${bin} --secret-path ${toml} --socket-path ${path.join(srvDir, 'playit.sock')}`);
+    await daemonReload();
+    const r = await uSvc('start', intgUnit('playit'));
     if (r.code !== 0) throw new Error(r.stderr || 'falha ao iniciar playit');
     return { ok: true };
   }
   if (name === 'cloudflare') {
     const bin = path.join(dir, 'cloudflared');
-    const tokFile = path.join(dir, 'cloudflared.token');
+    const tokFile = path.join(srvDir, 'cloudflared.token');
     if (!fs.existsSync(bin)) throw new Error('cloudflared não instalado');
-    if (!fs.existsSync(tokFile)) throw new Error('configure o token do túnel Cloudflare primeiro');
+    if (!fs.existsSync(tokFile)) throw new Error(`configure o token do túnel Cloudflare primeiro (servidor ${SRV().name})`);
     const token = fs.readFileSync(tokFile, 'utf8').trim();
-    writeUserUnit('craftbox-cloudflared', 'craftbox — Cloudflare Tunnel', `${bin} tunnel --no-autoupdate run --token ${token}`);
-    await run('systemctl', ['--user', 'daemon-reload']);
-    const r = await uSvc('start', 'craftbox-cloudflared');
+    writeUserUnit(intgUnit('cloudflare'), `craftbox — Cloudflare Tunnel (${SRV().name})`, `${bin} tunnel --no-autoupdate run --token ${token}`);
+    await daemonReload();
+    const r = await uSvc('start', intgUnit('cloudflare'));
     if (r.code !== 0) throw new Error(r.stderr || 'falha ao iniciar cloudflared');
     return { ok: true };
   }
@@ -1215,7 +1403,7 @@ async function integrationStop(name) {
     const out = r.stderr + r.stdout;
     throw new Error(tsPermMsg(out) || out.slice(-200) || 'falha ao desconectar');
   }
-  const unit = name === 'playit' ? 'craftbox-playit' : name === 'cloudflare' ? 'craftbox-cloudflared' : null;
+  const unit = intgUnit(name);
   if (!unit) throw new Error('integração desconhecida');
   await uSvc('stop', unit);
   return { ok: true };
@@ -1352,6 +1540,7 @@ const server = http.createServer((req, res) => {
         const { action } = await readBody(req);
         const r = await svcAction(action);
         audit('power', `${action} → ${SRV().name}`);
+        if (action === 'start' && r.code === 0) { try { await maybeStartTunnels(); } catch {} }
         return json(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, output: r.stderr || r.stdout });
       }
       if (p === '/api/properties' && req.method === 'GET') return json(res, 200, { properties: readProps() });
@@ -1375,26 +1564,52 @@ const server = http.createServer((req, res) => {
           const data = fs.readFileSync(path.join(SRV().dir, 'logs', 'latest.log'), 'utf8');
           text = data.split('\n').slice(-n).join('\n');
         } catch {
-          const r = await run('journalctl', ['-u', SRV().service, '-n', String(n), '--no-pager', '-o', 'cat']);
-          text = r.stdout || '(sem logs)';
+          text = EXEC_RUNNER
+            ? unitJournal(SRV().service, n)
+            : ((await run('journalctl', ['-u', SRV().service, '-n', String(n), '--no-pager', '-o', 'cat'])).stdout || '(sem logs)');
         }
         return json(res, 200, { log: text });
       }
       if (p === '/api/backups' && req.method === 'GET') {
         let items = [];
+        const bdir = path.join(SRV().dir, 'backups');
         try {
-          const dir = path.join(SRV().dir, 'backups');
-          items = fs.readdirSync(dir).filter(f => f.endsWith('.tar.gz')).map(f => {
-            const st = fs.statSync(path.join(dir, f));
+          items = fs.readdirSync(bdir).filter(f => f.endsWith('.tar.gz')).map(f => {
+            const st = fs.statSync(path.join(bdir, f));
             return { name: f, sizeMB: +(st.size / 1048576).toFixed(1), mtime: st.mtimeMs };
           }).sort((a, b) => b.mtime - a.mtime);
         } catch {}
-        return json(res, 200, { backups: items });
+        const totalMB = items.reduce((a, b) => a + (b.sizeMB || 0), 0);
+        return json(res, 200, { backups: items, totalMB });
       }
       if (p === '/api/backups' && req.method === 'POST') {
         const r = await run('bash', [path.join(SRV().dir, 'backup.sh')], { timeout: 120000 });
         audit('backup', `manual → ${SRV().name}`);
         return json(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, output: r.stderr || r.stdout || 'backup executado' });
+      }
+      if (p === '/api/backups/download' && req.method === 'GET') {
+        const bdir = path.join(SRV().dir, 'backups');
+        const name = path.basename(String(url.searchParams.get('name') || ''));
+        const f = path.join(bdir, name);
+        if (!name || !name.endsWith('.tar.gz') || !f.startsWith(bdir)) return json(res, 404, { error: 'não encontrado' });
+        try { fs.statSync(f); } catch { return json(res, 404, { error: 'não encontrado' }); }
+        res.writeHead(200, { 'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="${name}"` });
+        fs.createReadStream(f).pipe(res);
+        return;
+      }
+      if (p === '/api/backups/restore' && req.method === 'POST') {
+        const bdir = path.join(SRV().dir, 'backups');
+        const { name } = await readBody(req);
+        const safe = path.basename(String(name || ''));
+        const f = path.join(bdir, safe);
+        if (!safe || !safe.endsWith('.tar.gz') || !f.startsWith(bdir)) return json(res, 404, { error: 'não encontrado' });
+        try { fs.statSync(f); } catch { return json(res, 404, { error: 'não encontrado' }); }
+        const active = await svcActive();
+        if (active === 'active') return json(res, 409, { error: 'pare o servidor antes de restaurar (os mundos são sobrescritos)' });
+        const r = await run('bash', ['-c', 'tar -xzf "$1" -C "$2"', 'cb-restore', f, SRV().dir], { timeout: 180000 });
+        if (r.code !== 0) return json(res, 502, { ok: false, output: (r.stderr || r.stdout || '').slice(-300) });
+        audit('backup-restaurar', `${safe} → ${SRV().name}`);
+        return json(res, 200, { ok: true });
       }
       // --- conteudo (mods/plugins via Modrinth) ---
       if (p === '/api/content/info') {
@@ -1490,6 +1705,27 @@ const server = http.createServer((req, res) => {
       }
       // --- multi-servidor ---
       if (p === '/api/servers' && req.method === 'GET') return json(res, 200, await listServersDetailed());
+      const srvAct = p.match(/^\/api\/servers\/([^/]+)\/(start|stop|restart|status)$/);
+      if (srvAct) {
+        const [, id, action] = srvAct;
+        if (!listInstanceIds().includes(id)) return json(res, 404, { error: 'servidor não existe' });
+        return als.run(serverCtx(id), async () => {
+          try {
+            if (action === 'status') {
+              const active = await svcActive();
+              let players = null;
+              if (active === 'active') {
+                try { const l = await rcon('list'); const mm = l.match(/(\d+)\s+of a max of\s+(\d+)/i) || l.match(/(\d+)\/(\d+)/); if (mm) players = { online: +mm[1], max: +mm[2] }; } catch {}
+              }
+              return json(res, 200, { id, name: SRV().name, active, uptime: await svcUptime(), players });
+            }
+            const r = await svcAction(action);
+            audit(action === 'start' ? 'ligar' : action === 'stop' ? 'desligar' : 'reiniciar', `${SRV().name} (${id})`);
+            if (action === 'start' && r.code === 0) { try { await maybeStartTunnels(); } catch {} }
+            return json(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, output: r.stderr || r.stdout });
+          } catch (e) { return json(res, 500, { error: e.message }); }
+        });
+      }
       if (p === '/api/servers/select' && req.method === 'POST') {
         const { id } = await readBody(req);
         if (!multiEnabled()) return json(res, 400, { error: 'multi-servidor desativado' });
@@ -1555,7 +1791,7 @@ const server = http.createServer((req, res) => {
       }
       if (p === '/api/integrations/log' && req.method === 'GET') {
         const name = url.searchParams.get('name') || '';
-        const unit = name === 'playit' ? 'craftbox-playit' : name === 'cloudflare' ? 'craftbox-cloudflared' : null;
+        const unit = intgUnit(name);
         if (!unit) return json(res, 400, { error: 'nome inválido' });
         return json(res, 200, { log: await uJournal(unit, 120) });
       }
@@ -1591,15 +1827,32 @@ const server = http.createServer((req, res) => {
       if (p === '/api/integrations/cloudflare-token' && req.method === 'POST') {
         const { token } = await readBody(req);
         if (!token || !String(token).trim()) return json(res, 400, { error: 'token vazio' });
-        const f = path.join(integrationsDir(), 'cloudflared.token');
+        const f = path.join(intgSrvDir(), 'cloudflared.token');
         fs.writeFileSync(f, String(token).trim()); try { fs.chmodSync(f, 0o600); } catch {}
         return json(res, 200, { ok: true });
+      }
+      if (p === '/api/integrations/cloudflare-conf' && req.method === 'POST') {
+        const b = await readBody(req);
+        const meta = readInstanceMeta(SRV().dir);
+        if (typeof b.onStart === 'boolean') { meta.cfOnStart = b.onStart; writeInstanceMeta(SRV().dir, meta); }
+        if (b.hostname != null) {
+          const f = path.join(intgSrvDir(), 'cloudflared.host');
+          fs.writeFileSync(f, String(b.hostname).trim()); try { fs.chmodSync(f, 0o600); } catch {}
+        }
+        return json(res, 200, { ok: true });
+      }
+      if (p === '/api/integrations/playit-conf' && req.method === 'POST') {
+        const b = await readBody(req);
+        const meta = readInstanceMeta(SRV().dir);
+        meta.playitOnStart = !!b.onStart;
+        writeInstanceMeta(SRV().dir, meta);
+        return json(res, 200, { ok: true, onStart: meta.playitOnStart });
       }
       if (p === '/api/integrations/playit-secret' && req.method === 'POST') {
         const { secret } = await readBody(req);
         const s = String(secret || '').trim();
         if (!/^[0-9a-fA-F]{16,}$/.test(s)) return json(res, 400, { error: 'secret inválido (é uma sequência hexadecimal do playit.gg)' });
-        const f = path.join(integrationsDir(), 'playit.toml');
+        const f = path.join(intgSrvDir(), 'playit.toml');
         fs.writeFileSync(f, `secret_key = "${s}"\n`); try { fs.chmodSync(f, 0o600); } catch {}
         return json(res, 200, { ok: true });
       }
@@ -1686,4 +1939,25 @@ server.listen(CONFIG.port, CONFIG.host, () => {
   if (!CONFIG.auth.salt || !CONFIG.auth.hash) {
     console.log('AVISO: senha nao configurada. Rode:  node server.js --hash SUA_SENHA  e cole no config.json');
   }
+  if (EXEC_RUNNER) {
+    console.log(`[runner] modo container ativo (gerenciando processos em ${runDir()})`);
+    autostartServers()
+      .then(() => console.log('[runner] auto-start de servidores concluído'))
+      .catch(e => console.log('[runner] autostart:', e.message));
+  }
 });
+
+// shutdown gracioso: para os servidores/túneis antes de sair (importante no Docker,
+// onde o painel é o PID 1 e os mundos precisam de SIGTERM pra salvar).
+let shuttingDown = false;
+async function gracefulShutdown() {
+  if (shuttingDown) return; shuttingDown = true;
+  if (EXEC_RUNNER) {
+    let units = [];
+    try { units = fs.readdirSync(runDir(), { withFileTypes: true }).filter(d => d.isFile() && d.name.endsWith('.pid')).map(d => d.name.slice(0, -4)); } catch {}
+    for (const u of units) { try { await unitAction('stop', u); } catch {} }
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown().catch(() => process.exit(1)));
+process.on('SIGINT', () => gracefulShutdown().catch(() => process.exit(1)));

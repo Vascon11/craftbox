@@ -1,0 +1,23 @@
+# sensíveis / não entram na imagem
+.git
+.gitignore
+docker-compose.yml
+panel/config.json
+panel/panel.log
+panel/*.log
+.env
+
+# arquivos da distro/ferramentas
+airootfs
+build.sh
+cpu-diag.sh
+packages.extra
+diagnostico-cpu-800mhz.md
+INSTALL.md
+ROADMAP.md
+README.md
+LICENSE
+screenshots
+out
+out-**
+*.pdf

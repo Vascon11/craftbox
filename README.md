@@ -23,7 +23,7 @@ O craftbox vem com um **painel web** (**Node.js puro, zero dependências**) pra 
 
 - 🖥️ **Multi-servidor** — crie/clone/apague vários servidores (**Paper**, **Fabric** ou **Pumpkin** — servidor em Rust, experimental), cada um com loader, versão e porta próprios; troca entre eles por um seletor. Filosofia "um rodando por vez" pra hardware fraco.
 - 📊 **Painel** — status (no ar/desligado), jogadores online (RCON) e stats em tempo real: frequência de CPU, RAM, disco, temperatura, load, **peso do mundo** e **velocidade da internet** (sob demanda).
-- ⏻ **Ligar / reiniciar / desligar** via systemd (ou `systemctl --user`, modo **rootless** sem sudo).
+- ⏻ **Ligar / reiniciar / desligar** via systemd (ou `systemctl --user`, modo **rootless** sem sudo; no Docker, runner de processos diretos).
 - 🧩 **Loja de mods/plugins** estilo Prism/Modrinth — busca no [Modrinth](https://modrinth.com) com ícones, categorias e ordenação, **escolha de versão**, **dependências automáticas** e gestão dos instalados (ativar/desativar, atualizar, remover).
 - 📦 **Modpacks** — cria um servidor a partir de um modpack do Modrinth (`.mrpack`) em **Fabric/Quilt/Forge/NeoForge**: baixa os mods **em paralelo** (com **tela de carregamento** e progresso), **desativa sozinho os mods client-only** que derrubariam um servidor dedicado, monta a instância e mostra o link do pack pros jogadores instalarem o mesmo no cliente.
 - 🌐 **Integrações / Rede** — conecte o servidor sem abrir porta no roteador: **playit.gg** (túnel), **Cloudflare Tunnel** e **Tailscale** (VPN privada entre amigos), além de configurar **Wi-Fi** pelo próprio painel (`nmcli`).
@@ -143,6 +143,42 @@ git push origin v1.0.0
 
 ---
 
+## Rodar como container (Docker / Docker Compose)
+
+Além da ISO, o craftbox pode rodar em **qualquer máquina com Docker** — alternativo à distro inteira. O container traz o painel web, **OpenJDK 8/17/21** (qualquer versão do Minecraft) e os CLIs de túnel (playit, cloudflared, tailscale).
+
+Dentro do container o painel **gerencia os servidores por `child_process`** (runner `exec`, sem systemd e sem Docker socket): cada instância é um processo Java isolado com PID file/log próprios, e o `java` usado é escolhido **automaticamente pela versão do Minecraft** (`mcVersion` → JDK 8/17/21).
+
+```bash
+# usa a senha do painel via CRAFTBOX_PASSWORD na primeira subida
+docker compose up -d --build
+# → painel em http://localhost:8080
+# servidores na rede host: portas 25565-25575 (TCP/UDP)
+```
+
+### Variáveis de ambiente (`docker-compose.yml`)
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `TZ` | `UTC` | Fuso horário do container (ex: `America/Sao_Paulo`) |
+| `CRAFTBOX_PORT` | `8080` | Porta do painel dentro do container |
+| `CRAFTBOX_PASSWORD` | *(vazio)* | Senha inicial do painel (aplicada só se o `config.json` ainda não tiver senha) |
+| `CRAFTBOX_AUTOSTART` | *(vazio)* | Servidores que sobem com o container, separados por vírgula (ex: `zumbie,principal`). Sem isso, ligue pelo painel. |
+| `CRAFTBOX_MEM_LIMIT` | `4g` | Limite de memória do container |
+| `PLAYIT_ARCH` / `CLOUDFLARED_ARCH` | *(auto)* | Forçar arquitetura dos binários de túnel (auto = `TARGETARCH` do buildkit) |
+
+### Persistência e portas
+
+- **Volume `/data`** guarda tudo: `config.json`, **instâncias** (`/data/servers/<id>/` — mundos, mods, configs, **backups**), integrações (`/data/craftbox-integrations`) e o estado do runner (`/data/craftbox-run`). Para editar no host, troque por um bind mount (`./data:/data`).
+- **Portas `25565-25575` (TCP/UDP)** mapeadas para os servidores MC; `19132/UDP` (Geyser/Bedrock) fica comentada no compose.
+- `docker stop` executa o **shutdown gracioso** (SIGTERM pros processos → mundos salvam antes de sair).
+
+### Mesmo caminho em distro física e no container
+
+O backend aceita os mesmos caminhos em ambos os ambientes, via `config.json` **ou** env vars (`CRAFTBOX_SERVERS_DIR`, `CRAFTBOX_INTEGRATIONS_DIR`, `CRAFTBOX_RUN_DIR`). A única diferença é o gerenciador de processos: **systemd** na ISO (comportamento original) vs **runner exec** no container — detectado automaticamente quando não há `/run/systemd/system` (ou forçando `CRAFTBOX_RUNNER=exec`).
+
+---
+
 ## Estrutura do projeto
 
 ```
@@ -152,6 +188,12 @@ craftbox/
 │   ├── root/.zprofile              # abre o instalador automaticamente no boot
 │   └── etc/motd
 ├── panel/                          # o painel web (embarcado na ISO pelo build)
+├── docker/
+│   ├── entrypoint.sh               # prepara /data e sobe o painel no container
+│   ├── init.js                     # cria config.json + semeia binários de túnel
+│   └── java-select                 # wrapper: escolhe JDK 8/17/21 pelo MC version
+├── Dockerfile                      # imagem: Node 20 + JDK 8/17/21 + túneis
+├── docker-compose.yml              # compose pronto (volumes, portas 25565-75, envs)
 ├── packages.extra                  # pacotes extras do ambiente live
 ├── scripts/build-in-container.sh   # monta a ISO (roda dentro do container Arch)
 ├── build.sh                        # wrapper de build local (Docker)

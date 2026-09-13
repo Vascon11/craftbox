@@ -1,0 +1,59 @@
+services:
+  craftbox:
+    build:
+      context: .
+      args:
+        # arquitetura automática via buildkit (TARGETARCH); só definir p/ forçar:
+        PLAYIT_ARCH: ${PLAYIT_ARCH:-}
+        CLOUDFLARED_ARCH: ${CLOUDFLARED_ARCH:-}
+    image: craftbox:latest
+    container_name: craftbox
+    restart: unless-stopped
+
+    environment:
+      # fuso horário do container (proíbe pastas com logs/data errados)
+      TZ: "${TZ:-UTC}"
+      # porta do painel dentro do container (espelhar no bloco ports abaixo)
+      CRAFTBOX_PORT: "8080"
+      # senha inicial do painel (só é aplicada se o config.json ainda não tiver senha)
+      CRAFTBOX_PASSWORD: "${CRAFTBOX_PASSWORD:-}"
+      # servidores a subir junto com o container, separado por vírgula (ex: zumbie,principal)
+      CRAFTBOX_AUTOSTART: "${CRAFTBOX_AUTOSTART:-}"
+
+    # volume persistente único: /data guarda config.json, instâncias (mundos, mods,
+    # configs, backups), integrações e o state do runner de processos.
+    volumes:
+      - craftbox-data:/data
+      # Para inspecionar/editar os arquivos no host, use um bind mount:
+      # - ./data:/data
+
+    # intervalo 25565-25575 (TCP/UDP) reservado aos servidores Minecraft.
+    # As instâncias usam server-port dentro desse intervalo.
+    ports:
+      - "8080:8080"
+      - "25565-25575:25565-25575"
+      - "25565-25575:25565-25575/udp"
+      # Geyser (Bedrock) — porta 19132 UDP, descomente se precisar:
+      # - "19132:19132/udp"
+
+    # limite de memória do container (define também heaps menores p/ cada servidor
+    # no painel > Config > Desempenho: view/simulation distance, max-players).
+    mem_limit: "${CRAFTBOX_MEM_LIMIT:-4g}"
+
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    # Tailscale dentro do container (opcional). Exige NET_ADMIN + /dev/net/tun
+    # e o comando `tailscale up` disparado pelo painel (Integrações). No host,
+    # o Tailscale costuma rodar no sistema e o painel só o comanda.
+    # cap_add:
+    #   - NET_ADMIN
+    # devices:
+    #   - "/dev/net/tun:/dev/net/tun"
+
+volumes:
+  craftbox-data:
