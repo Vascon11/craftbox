@@ -156,6 +156,30 @@ docker compose up -d --build
 # servidores na rede host: portas 25565-25575 (TCP/UDP)
 ```
 
+### Como usar (primeiros passos)
+
+```bash
+# 1. Pré-requisitos: Docker Engine + Compose (https://docs.docker.com/engine/install/)
+docker --version && docker compose version
+
+# 2. Clonar e entrar no projeto
+git clone https://github.com/Vascon11/craftbox.git && cd craftbox
+
+# 3. Definir a senha inicial do painel e subir
+CRAFTBOX_PASSWORD=sua-senha docker compose up -d --build
+```
+
+4. Abra **http://localhost:8080** e entre com a senha definida acima.
+5. No painel, em **Servidores → Novo**, crie o primeiro servidor (escolha loader Paper/Fabric, versão e porta dentro de `25565-25575`). O aguarde baixar e montar a instância.
+6. **Ligar** o servidor pelos cards/hero. Depois de no ar, entre no console (`RCON`), na aba **Logs** (tempo real) e gere **Backups** do mundo.
+7. Para subir servidores automaticamente junto com o container, rode com `CRAFTBOX_AUTOSTART=zumbie,principal` (ou edite o `.env` do compose) uma segunda vez.
+8. **Parar**: `docker stop craftbox` e `docker compose down` — o container entrega **SIGTERM** aos servidores, salvando os mundos antes de sair.
+9. **Atualizar**: `git pull` + `docker compose up -d --build`.
+
+Logs do painel/runner: `docker logs -f craftbox`.
+
+> **Dica:** se a porta `8080` do host já estiver ocupada, mude só a primeira parte do mapeamento no compose (`"8081:8080"`). O `CRAFTBOX_PORT` (lado do container) continua `8080`.
+
 ### Variáveis de ambiente (`docker-compose.yml`)
 
 | Variável | Padrão | Descrição |
