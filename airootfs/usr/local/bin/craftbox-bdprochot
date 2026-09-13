@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# craftbox: desliga o BD PROCHOT (bit 0 do MSR 0x1FC) em todos os nucleos.
+#
+# Faz a CPU ignorar PROCHOT *externo* espurio — comum em notebooks Dell/Haswell
+# velhos com bateria ausente ou defeituosa, cujo EC prende a CPU no minimo
+# (~800 MHz) afirmando PROCHOT continuamente mesmo com a CPU fria.
+#
+# IMPORTANTE: a protecao termica INTERNA da CPU (TCC/DTS, baseada na temperatura
+# do die) continua totalmente ativa — a CPU ainda se protege de superaquecimento.
+# So o sinal PROCHOT externo (de outros componentes) deixa de derrubar a CPU.
+modprobe msr 2>/dev/null || true
+cur=$(rdmsr -p0 0x1fc 2>/dev/null) || exit 0
+[ -n "$cur" ] || exit 0
+new=$(( 0x$cur & ~1 ))
+wrmsr -a 0x1fc "$new" 2>/dev/null || exit 0
+echo "craftbox-bdprochot: MSR 0x1FC 0x$cur -> $(printf '0x%x' "$new") (BD PROCHOT desligado)"

@@ -167,6 +167,7 @@ pacstrap -K /mnt \
   networkmanager openssh sudo \
   jre-openjdk-headless \
   git tmux nano vim htop jq curl wget which nodejs \
+  msr-tools \
   || die "pacstrap falhou (rede?)."
 
 say "Gerando fstab"
@@ -400,6 +401,15 @@ else
   warn "painel nao encontrado no live (/opt/craftbox-panel); a ISO foi montada sem ele?"
 fi
 
+# fix do BD PROCHOT (destrava CPU presa em ~800 MHz em Dell/Haswell velhos)
+# copia o script + servico pro sistema instalado; so e HABILITADO se OPTIMIZE=true
+if [ -f /usr/local/bin/craftbox-bdprochot ]; then
+  install -Dm755 /usr/local/bin/craftbox-bdprochot /mnt/usr/local/bin/craftbox-bdprochot
+  install -Dm644 /etc/systemd/system/craftbox-bdprochot.service /mnt/etc/systemd/system/craftbox-bdprochot.service
+  install -Dm644 /etc/modules-load.d/msr.conf /mnt/etc/modules-load.d/msr.conf 2>/dev/null || true
+  ok "fix de BD PROCHOT copiado (habilita no boot se otimizado)"
+fi
+
 # script de configuracao que roda dentro do chroot
 cat > /mnt/root/chroot-setup.sh <<CHROOT
 #!/usr/bin/env bash
@@ -506,6 +516,10 @@ systemctl enable NetworkManager sshd systemd-timesyncd
 systemctl enable minecraft@$SRVID
 systemctl enable mc-backup@$SRVID.timer
 [ -d /opt/craftbox-panel ] && systemctl enable craftbox-panel || true
+# destrava CPU (BD PROCHOT) so no modo otimizado
+if [ "$OPTIMIZE" = "true" ] && [ -f /etc/systemd/system/craftbox-bdprochot.service ]; then
+  systemctl enable craftbox-bdprochot || true
+fi
 
 # regenera initramfs por garantia
 mkinitcpio -P

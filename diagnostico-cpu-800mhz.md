@@ -132,6 +132,35 @@ pra evitar brownout do adaptador, mesmo com fonte boa. Isso casa com tudo aqui
 de volta e rodar `cpu-diag.sh` de novo. Se destravar → era isso.
 Depois, em ordem: **CR2032** (4 bipes/RTC = CMOS morta) e **BIOS A12 → atual**.
 
+## ✅ RESOLVIDO (13/09/2026) — era BD PROCHOT
+
+Teste no **Linux Mint 22.3 (kernel 6.14)** bootado do Ventoy (distro/kernel totalmente
+diferentes) → **mesma trava**: 797 MHz reais, `PROCHOT bit2=1` ativo, termais frios.
+Isso **descarta 100% o SO/Arch/driver**. Confirmado: **nenhuma bateria instalada** (só AC),
+BIOS **A12/2016**, turbo habilitado no SO (`no_turbo=0`).
+
+**Causa raiz: BD PROCHOT** (bit 0 do MSR `0x1FC` / `MSR_POWER_CTL`). Um circuito externo
+(provável do slot de bateria ausente/defeituoso) afirmava PROCHOT continuamente, e a CPU
+obedecia porque o BD PROCHOT (PROCHOT bidirecional) estava **ligado**.
+
+**Fix ao vivo (comprovado):** `wrmsr -a 0x1fc <valor & ~1>` (limpa o bit 0):
+- `0x4005d → 0x4005c`
+- Freq real sob carga: **798 → 2400 MHz** (turbo all-core do i5-4210U) 🚀
+- `PROCHOT bit2` caiu pra **0**.
+- A proteção térmica **interna** (TCC/DTS pela temperatura do die) continua ativa —
+  só o PROCHOT **externo** deixa de derrubar a CPU.
+
+### Persistência (no craftbox)
+- `airootfs/usr/local/bin/craftbox-bdprochot` + `craftbox-bdprochot.service` (oneshot no boot,
+  reaplica o bit — que reseta a cada reboot) + `msr-tools` no pacstrap + `msr` em modules-load.
+- `mc-install` habilita o serviço **quando o usuário escolhe o modo otimizado**.
+- Instalação num sistema já existente: `sudo bash cpu-diag.sh --install-fix`
+  (instala msr-tools, cria o serviço, liga na hora e em todo boot).
+
+### Ainda vale (hardware, opcional)
+Trocar a **CR2032** (4 bipes/RTC) e **atualizar a BIOS** (A12/2016). Mas o cap de CPU
+em si está **resolvido por software** — não depende mais disso.
+
 ## Artefatos
 
 - Scripts usados: `/tmp/opencode/cpu_test.sh`, `/tmp/opencode/perf_test.sh`, `/tmp/opencode/hw_probe.sh`, `/tmp/opencode/msr_probe.sh`, `/tmp/opencode/userspace_test.sh` (máquina local de onde os testes rodaram).

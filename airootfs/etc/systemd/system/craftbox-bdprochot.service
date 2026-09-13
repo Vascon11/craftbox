@@ -1,0 +1,12 @@
+[Unit]
+Description=craftbox: desliga BD PROCHOT (destrava CPU presa no minimo)
+Documentation=https://github.com/Vascon11/craftbox
+ConditionVirtualization=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/craftbox-bdprochot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

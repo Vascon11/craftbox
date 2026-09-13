@@ -40,9 +40,45 @@ revert_acpi() {
   echo ">> REINICIE:  sudo reboot"
   exit 0
 }
+install_fix() {
+  echo "Instalando o fix permanente de BD PROCHOT..."
+  if command -v pacman >/dev/null;  then pacman -Sy --noconfirm msr-tools >/dev/null 2>&1
+  elif command -v apt-get >/dev/null; then apt-get -qq update >/dev/null 2>&1; apt-get -qq install -y msr-tools >/dev/null 2>&1; fi
+  command -v wrmsr >/dev/null || die "nao consegui instalar msr-tools (sem rede?)"
+  cat > /usr/local/bin/craftbox-bdprochot <<'S'
+#!/usr/bin/env bash
+# craftbox: desliga o BD PROCHOT (bit0 do MSR 0x1FC) — a CPU ignora PROCHOT externo
+# espurio (bateria/EC) que a prendia no minimo. Protecao termica INTERNA segue ativa.
+modprobe msr 2>/dev/null || true
+cur=$(rdmsr -p0 0x1fc 2>/dev/null) || exit 0
+[ -n "$cur" ] || exit 0
+new=$(( 0x$cur & ~1 ))
+wrmsr -a 0x1fc "$new" 2>/dev/null || exit 0
+echo "craftbox-bdprochot: MSR 0x1FC 0x$cur -> $(printf '0x%x' "$new") (BD PROCHOT desligado)"
+S
+  chmod +x /usr/local/bin/craftbox-bdprochot
+  cat > /etc/systemd/system/craftbox-bdprochot.service <<'S'
+[Unit]
+Description=craftbox: desliga BD PROCHOT (destrava CPU presa no minimo)
+ConditionVirtualization=no
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/craftbox-bdprochot
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+S
+  echo msr > /etc/modules-load.d/msr.conf 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl enable --now craftbox-bdprochot
+  echo ">> Fix instalado e ativo AGORA (e sobe em todo boot)."
+  echo ">> Confirme com:  sudo bash $0"
+  exit 0
+}
 case "${1:-}" in
   --apply-acpi)  apply_acpi ;;
   --revert-acpi) revert_acpi ;;
+  --install-fix) install_fix ;;
   "" ) : ;;
   * ) die "opcao desconhecida: $1" ;;
 esac
