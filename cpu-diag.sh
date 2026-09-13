@@ -156,9 +156,13 @@ echo "== VEREDITO =="
 if [ -n "$REAL" ]; then
   if [ "$REAL" -ge 1500 ]; then
     echo "CPU chegou a ${REAL} MHz sob carga -> DESTRAVOU."
-    grep -q intel_pstate=disable /proc/cmdline \
-      && echo "   E estava com acpi-cpufreq: o cap era DRIVER/SO (intel_pstate passivo)." \
-      || echo "   Continua no intel_cpufreq e destravou: provavel que o reboot limpou o latch do EC."
+    if systemctl is-active --quiet craftbox-bdprochot 2>/dev/null; then
+      echo "   O servico craftbox-bdprochot desligou o BD PROCHOT (0x1FC bit0) -> fix ativo."
+    elif [ "$(( 16#$(rdmsr -p0 0x1fc 2>/dev/null || echo 1) & 1 ))" = 0 ]; then
+      echo "   BD PROCHOT (0x1FC bit0) esta desligado -> foi isso que destravou."
+    else
+      echo "   Destravou (BD PROCHOT ainda ligado; pode ter sido reset do EC)."
+    fi
   else
     echo "CPU ainda presa em ~${REAL} MHz sob carga -> CAP CONTINUA."
     PLATCH=$(( (16#${THERM:-0} >> 3) & 1 ))
