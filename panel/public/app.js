@@ -182,6 +182,12 @@ async function refreshStatus() {
     $('#diskUsed').textContent = s.disk.usedGB;
     $('#diskMeta').textContent = `de ${s.disk.totalGB} GB (${pct(s.disk.usedGB, s.disk.totalGB)}%)`;
     $('#diskBar').style.width = pct(s.disk.usedGB, s.disk.totalGB) + '%';
+    $('#diskBar').classList.toggle('hot', !!s.disk.low);
+    const dw = $('#diskWarn');
+    if (s.disk.low) {
+      dw.hidden = false;
+      dw.textContent = `⚠ Só ${s.disk.freeGB} GB livres (abaixo de ${s.disk.lowGB} GB): o mundo pode falhar ao salvar e o login dos jogadores pode travar. Libere espaço. No Docker Desktop esse número é o disco virtual do WSL, não o C: do Windows.`;
+    } else dw.hidden = true;
   }
 }
 let statusTimer;
@@ -1024,6 +1030,25 @@ async function scanWifi() {
   });
 }
 $('#netReload').addEventListener('click', loadNet);
+
+// ---- diagnóstico: alcance dos servidores de login da Mojang ----
+async function runMojangDiag() {
+  const btn = $('#mojangDiagBtn'), box = $('#mojangDiag'); if (!box) return;
+  btn.disabled = true; box.innerHTML = '<div class="muted small" style="margin-top:.5rem">testando… (até ~6s)</div>';
+  const { ok, data } = await api('/api/diag/mojang');
+  btn.disabled = false;
+  if (!ok) { box.innerHTML = `<div class="err small" style="margin-top:.5rem">${esc(data.error || 'erro')}</div>`; return; }
+  const rows = (data.targets || []).map(t => {
+    const host = (() => { try { return new URL(t.url).host; } catch { return t.name; } })();
+    const res = t.ok ? `alcançável · HTTP ${t.status} · ${t.ms} ms` : `falhou · ${esc(t.error || '?')} · ${t.ms} ms`;
+    return `<div class="intg-note ${t.ok ? 'ok' : 'warn'}">${t.ok ? '✓' : '✗'} <code>${esc(host)}</code> — ${res}</div>`;
+  }).join('');
+  let tip;
+  if (data.ok) tip = 'Tudo alcançável. Se ainda aparecer "Authentication servers are down", pode ser instabilidade momentânea da própria Mojang — tente de novo.';
+  else tip = `O painel/servidor não consegue falar com a Mojang: o problema é a <b>rede, o DNS ou o Docker deste host</b> (ex.: disco cheio, Docker travado, sem internet) — <b>não</b> a conta do jogador.${data.onlineMode === false ? ' (Este servidor está em <code>online-mode=false</code>, então o login não depende disso.)' : ' Com <code>online-mode=true</code> ninguém consegue entrar enquanto isso falhar.'}`;
+  box.innerHTML = `<div style="margin-top:.5rem">${rows}</div><div class="muted small" style="margin-top:.4rem">${tip}</div>`;
+}
+$('#mojangDiagBtn').addEventListener('click', runMojangDiag);
 
 // ---- detalhes extras (peso do mundo, velocidade) ----
 function fmtBytes(n) {

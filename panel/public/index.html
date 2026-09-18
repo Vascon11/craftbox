@@ -152,6 +152,7 @@
             <div class="big"><span id="diskUsed">—</span> <span class="unit">GB</span></div>
             <div class="bar"><div id="diskBar" class="bar-fill"></div></div>
             <div class="sub" id="diskMeta">—</div>
+            <div id="diskWarn" class="intg-note warn small" style="margin-top:.45rem" hidden></div>
           </div>
 
           <div class="metric">
@@ -326,6 +327,14 @@
           </div>
           <div id="netStatus" class="muted small" style="margin-top:.6rem">—</div>
           <div id="netWifi" style="margin-top:.6rem"></div>
+          <div style="margin-top:.9rem;padding-top:.8rem;border-top:1px solid var(--line)">
+            <div class="row spread">
+              <b>Login dos jogadores (Mojang)</b>
+              <button id="mojangDiagBtn" class="ghost sm">Testar conexão com a Mojang</button>
+            </div>
+            <p class="muted small" style="margin-top:.4rem">Com <code>online-mode=true</code> o servidor confere cada login nos servidores da Mojang. Se este teste falhar, os jogadores veem <i>"Authentication servers are down"</i>.</p>
+            <div id="mojangDiag"></div>
+          </div>
         </div>
         <div class="card">
           <div class="row spread">

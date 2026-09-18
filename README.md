@@ -201,6 +201,24 @@ Logs do painel/runner: `docker logs -f craftbox`.
 
 O backend aceita os mesmos caminhos em ambos os ambientes, via `config.json` **ou** env vars (`CRAFTBOX_SERVERS_DIR`, `CRAFTBOX_INTEGRATIONS_DIR`, `CRAFTBOX_RUN_DIR`). A única diferença é o gerenciador de processos: **systemd** na ISO (comportamento original) vs **runner exec** no container — detectado automaticamente quando não há `/run/systemd/system` (ou forçando `CRAFTBOX_RUNNER=exec`).
 
+### Problemas comuns
+
+**"Authentication servers are down. Please try again later, sorry!"** (com `online-mode=true`) — quem valida o login é o **servidor**, não o jogador: ele precisa de saída HTTPS estável para `sessionserver.mojang.com` e `api.minecraftservices.com`. Se a Mojang está no ar e o erro só acontece no seu servidor, o problema costuma ser o **Docker travado ou sem recursos** no host — não a conta do jogador.
+
+Pra checar se o container alcança a Mojang (`204` = alcança):
+
+```bash
+docker exec craftbox curl -sS -o /dev/null -w "%{http_code}\n" \
+  "https://sessionserver.mojang.com/session/minecraft/hasJoined?username=x&serverId=y"
+```
+
+Ou use o botão **Testar conexão com a Mojang** no painel.
+
+**No Windows (Docker Desktop / WSL2):**
+
+- Confira o **espaço livre do `C:`** no Windows. O disco que o painel mostra é o disco virtual (VHDX) do WSL, que cresce sob demanda, então esse número **não** reflete o `C:` (o aviso de disco baixo do painel, abaixo de 2 GB, tem a mesma limitação). Com o `C:` quase cheio, o Docker Desktop trava.
+- Se `docker ps` fica **pendurado**, o engine travou: libere espaço e **reinicie o Docker Desktop**. Caso real: com menos de 500 MB livres no `C:`, os jogadores caíam nesse erro, e liberar espaço + reiniciar resolveu na hora.
+
 ---
 
 ## Estrutura do projeto

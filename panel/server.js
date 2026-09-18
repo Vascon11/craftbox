@@ -435,6 +435,8 @@ function cpuTemp() {
   for (const z of zones) { const v = readNum(z); if (v && v > 1000) return Math.round(v / 1000); }
   return null;
 }
+// Abaixo disso o dashboard avisa (mundo/logs podem falhar ao gravar). So aviso, nao bloqueia o start.
+const DISK_LOW_GB = 2;
 async function systemStats() {
   const mem = { total: Math.round(os.totalmem() / 1048576), free: Math.round(os.freemem() / 1048576) };
   mem.used = mem.total - mem.free;
@@ -442,8 +444,9 @@ async function systemStats() {
   try {
     const s = fs.statfsSync(SRV().dir);
     const totalGB = (s.blocks * s.bsize) / 1073741824;
-    const freeGB = (s.bfree * s.bsize) / 1073741824;
-    disk = { totalGB: +totalGB.toFixed(1), usedGB: +(totalGB - freeGB).toFixed(1) };
+    // bavail (nao bfree): bfree inclui os ~5% reservados ao root no ext4, que o processo do MC nao usa
+    const freeGB = (s.bavail * s.bsize) / 1073741824;
+    disk = { totalGB: +totalGB.toFixed(1), usedGB: +(totalGB - freeGB).toFixed(1), freeGB: +freeGB.toFixed(1), low: freeGB < DISK_LOW_GB, lowGB: DISK_LOW_GB };
   } catch {}
   return {
     load: os.loadavg().map(x => +x.toFixed(2)),
@@ -511,6 +514,35 @@ function speedTest(bytes = 25000000) {
     req.setTimeout(30000, () => req.destroy(new Error('tempo esgotado')));
     req.on('error', reject);
   });
+}
+
+// Diagnostico: o container/host alcanca os servidores de login da Mojang?
+// Com online-mode=true o servidor chama hasJoined a cada entrada; se isso falhar
+// o cliente ve "Authentication servers are down" (mesmo com a Mojang no ar).
+// Qualquer resposta HTTP prova alcance. Sob demanda — fora do healthcheck de proposito.
+const MOJANG_TARGETS = [
+  { name: 'sessionserver', url: 'https://sessionserver.mojang.com/session/minecraft/hasJoined?username=craftbox&serverId=diag' }, // esperado 204
+  { name: 'minecraftservices', url: 'https://api.minecraftservices.com/' }
+];
+async function probeUrl(url, timeoutMs = 6000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  const start = Date.now();
+  try {
+    const r = await fetch(url, { signal: ac.signal, redirect: 'manual', headers: { 'User-Agent': UA } });
+    try { await r.body?.cancel(); } catch {}
+    return { ok: true, status: r.status, ms: Date.now() - start };
+  } catch (e) {
+    const code = ac.signal.aborted ? 'ETIMEDOUT' : ((e.cause && (e.cause.code || e.cause.name)) || e.code || e.name);
+    const msg = ac.signal.aborted ? `sem resposta em ${timeoutMs / 1000}s` : ((e.cause && e.cause.message) || e.message);
+    return { ok: false, status: null, ms: Date.now() - start, error: code ? `${code}: ${msg}` : msg, code: code || null };
+  } finally { clearTimeout(timer); }
+}
+async function diagMojang() {
+  const results = await Promise.all(MOJANG_TARGETS.map(async t => ({ name: t.name, url: t.url, ...(await probeUrl(t.url)) })));
+  let onlineMode = null;
+  try { const props = readProps(); if (props && props['online-mode'] != null) onlineMode = props['online-mode'] !== 'false'; } catch {}
+  return { ok: results.every(r => r.ok), onlineMode, targets: results };
 }
 
 // ---------------------------------------------------------------------------
@@ -1819,6 +1851,10 @@ const server = http.createServer((req, res) => {
       }
       if (p === '/api/worldsize' && req.method === 'GET') {
         return json(res, 200, worldSize());
+      }
+      if (p === '/api/diag/mojang' && req.method === 'GET') {
+        try { return json(res, 200, await diagMojang()); }
+        catch (e) { return json(res, 500, { error: e.message }); }
       }
       if (p === '/api/speedtest' && (req.method === 'POST' || req.method === 'GET')) {
         try { return json(res, 200, await speedTest()); }
