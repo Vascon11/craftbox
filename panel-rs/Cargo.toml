@@ -1,0 +1,32 @@
+[package]
+name = "craftbox-panel"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Backend do painel craftbox em Rust (migração do panel/server.js, mesmas rotas)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "craftbox-panel"
+path = "src/main.rs"
+
+[dependencies]
+# syscalls: statfs, kill, sigwait, gmtime/localtime
+libc = "0.2"
+# primitivas criptográficas (HMAC-SHA256, PBKDF2, RNG); também é o provider do rustls
+ring = "0.17"
+# cliente HTTP bloqueante p/ chamadas de saída (Mojang, depois Modrinth/Paper/Fabric)
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[profile.release]
+# compilação na instalação (Haswell 2 núcleos): nada de LTO nem codegen-units=1 aqui
+opt-level = 3
+strip = true
+panic = "unwind"   # cada requisição roda sob catch_unwind (erro vira 500, não derruba o painel)
+
+# binário pré-compilado de fallback: mais lento de compilar, menor e um pouco mais rápido
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
