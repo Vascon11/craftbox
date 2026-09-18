@@ -978,8 +978,8 @@ async function createInstance({ name, loader, version }) {
 }
 async function cloneInstance(srcId, name) {
   if (!multiEnabled()) throw new Error('multi-servidor não está ativo');
+  if (!listInstanceIds().includes(srcId)) throw new Error('servidor de origem não existe');
   const src = path.join(CONFIG.serversDir, srcId);
-  if (!fs.existsSync(src)) throw new Error('servidor de origem não existe');
   const id = uniqueId(slugifyId(name || (srcId + '-copia')));
   const dir = path.join(CONFIG.serversDir, id);
   fs.cpSync(src, dir, { recursive: true });
@@ -994,8 +994,9 @@ async function cloneInstance(srcId, name) {
 }
 async function deleteInstance(id) {
   if (!multiEnabled()) throw new Error('multi-servidor não está ativo');
+  // so ids de instancias existentes: '' ou '..' resolveriam pra serversDir/pasta-mae (rm -rf)
+  if (!listInstanceIds().includes(id)) throw new Error('servidor não existe');
   const dir = path.join(CONFIG.serversDir, id);
-  if (!fs.existsSync(dir)) throw new Error('servidor não existe');
   await svcAction('stop', CONFIG.serviceTemplate + id).catch(() => {});
   fs.rmSync(dir, { recursive: true, force: true });
   if (CONFIG.activeServer === id) { CONFIG.activeServer = listInstanceIds()[0] || ''; saveConfig(); }
