@@ -10,6 +10,13 @@ services:
     container_name: craftbox
     restart: unless-stopped
 
+    # tini como PID 1: reapa processos zumbis (java/bash órfãos das instâncias) e
+    # repassa SIGTERM/SIGINT ao painel.
+    init: true
+    # o painel para as instâncias em sequência (até ~12s cada) antes de sair; o
+    # default de 10s do Docker daria SIGKILL antes de os mundos salvarem.
+    stop_grace_period: 90s
+
     environment:
       # fuso horário do container (proíbe pastas com logs/data errados)
       TZ: "${TZ:-UTC}"

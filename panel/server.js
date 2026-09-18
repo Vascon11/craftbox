@@ -244,10 +244,23 @@ function unitExecFor(unit) {
   } catch {}
   return { cmd: null, cwd: process.cwd() };
 }
+// JDK por versão do Minecraft (o wrapper 'java' da imagem tem 8/17/21/25):
+//   AA.x (calendário, 26.1+) → 25 | 1.20.5+ e 1.21+ → 21 | 1.17–1.20.4 → 17 | ≤1.16 → 8
+// sufixos de snapshot/pre-release ("1.20.5-pre1", "26.1-snapshot-3") caem na faixa da
+// versão base; snapshots semanais antigos (AAwSSx) usam o ano/semana em que a Mojang
+// subiu o requisito. Desconhecido → 21 (roda tudo de 1.17 a 1.21.x, o grosso das instâncias).
 function javaForMc(ver) {
-  const m = /^1\.(\d+)/.exec(String(ver || ''));
-  if (m) { const v = +m[1]; if (v >= 21) return 21; if (v >= 17) return 17; return 8; }
-  return 17;
+  const s = String(ver || '').trim().toLowerCase();
+  const w = /^(\d{2})w(\d{2})[a-z]$/.exec(s);
+  if (w) { const y = +w[1], wk = +w[2]; if (y > 24 || (y === 24 && wk >= 14)) return 21; if (y > 21 || (y === 21 && wk >= 19)) return 17; return 8; }
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(s);
+  if (!m) return 21;
+  const [maj, min, patch] = [+m[1], +m[2], +(m[3] || 0)];
+  if (maj >= 26) return 25;
+  if (maj !== 1) return 21;
+  if (min >= 21 || (min === 20 && patch >= 5)) return 21;
+  if (min >= 17) return 17;
+  return 8;
 }
 function spawnUnit(unit, spec) {
   unit = path.basename(unit);
@@ -1984,7 +1997,8 @@ server.listen(CONFIG.port, CONFIG.host, () => {
 });
 
 // shutdown gracioso: para os servidores/túneis antes de sair (importante no Docker,
-// onde o painel é o PID 1 e os mundos precisam de SIGTERM pra salvar).
+// onde o SIGTERM chega só ao painel e os mundos precisam de SIGTERM pra salvar;
+// o compose dá stop_grace_period folgado para essa parada em sequência).
 let shuttingDown = false;
 async function gracefulShutdown() {
   if (shuttingDown) return; shuttingDown = true;

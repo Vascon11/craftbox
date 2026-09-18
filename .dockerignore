@@ -1,7 +1,9 @@
 # sensíveis / não entram na imagem
 .git
 .gitignore
-docker-compose.yml
+docker-compose*.yml
+Dockerfile
+.dockerignore
 panel/config.json
 panel/panel.log
 panel/*.log
@@ -21,3 +23,8 @@ screenshots
 out
 out-**
 *.pdf
+.github
+scripts
+**/node_modules
+# painel em Rust (projeto à parte; target/ é enorme)
+panel-rs

@@ -145,9 +145,9 @@ git push origin v1.0.0
 
 ## Rodar como container (Docker / Docker Compose)
 
-Além da ISO, o craftbox pode rodar em **qualquer máquina com Docker** — alternativo à distro inteira. O container traz o painel web, **OpenJDK 8/17/21** (qualquer versão do Minecraft) e os CLIs de túnel (playit, cloudflared, tailscale).
+Além da ISO, o craftbox pode rodar em **qualquer máquina com Docker** — alternativo à distro inteira. O container traz o painel web, **OpenJDK 8/17/21/25** (qualquer versão do Minecraft, inclusive as por calendário 26.x) e os CLIs de túnel (playit, cloudflared, tailscale).
 
-Dentro do container o painel **gerencia os servidores por `child_process`** (runner `exec`, sem systemd e sem Docker socket): cada instância é um processo Java isolado com PID file/log próprios, e o `java` usado é escolhido **automaticamente pela versão do Minecraft** (`mcVersion` → JDK 8/17/21).
+Dentro do container o painel **gerencia os servidores por `child_process`** (runner `exec`, sem systemd e sem Docker socket): cada instância é um processo Java isolado com PID file/log próprios, e o `java` usado é escolhido **automaticamente pela versão do Minecraft** (`mcVersion` → JDK 8 até 1.16, 17 de 1.17 a 1.20.4, 21 de 1.20.5 a 1.21.x e 25 nas versões por calendário 26.1+).
 
 ```bash
 # usa a senha do painel via CRAFTBOX_PASSWORD na primeira subida
@@ -195,7 +195,7 @@ Logs do painel/runner: `docker logs -f craftbox`.
 
 - **Volume `/data`** guarda tudo: `config.json`, **instâncias** (`/data/servers/<id>/` — mundos, mods, configs, **backups**), integrações (`/data/craftbox-integrations`) e o estado do runner (`/data/craftbox-run`). Para editar no host, troque por um bind mount (`./data:/data`).
 - **Portas `25565-25575` (TCP/UDP)** mapeadas para os servidores MC; `19132/UDP` (Geyser/Bedrock) fica comentada no compose.
-- `docker stop` executa o **shutdown gracioso** (SIGTERM pros processos → mundos salvam antes de sair).
+- `docker stop` executa o **shutdown gracioso** (SIGTERM pros processos → mundos salvam antes de sair). O compose usa `init: true` (tini como PID 1) e `stop_grace_period: 90s`, porque o painel para as instâncias uma a uma; com `docker run` puro, passe `--init --stop-timeout 90`.
 
 ### Mesmo caminho em distro física e no container
 
@@ -233,8 +233,8 @@ craftbox/
 ├── docker/
 │   ├── entrypoint.sh               # prepara /data e sobe o painel no container
 │   ├── init.js                     # cria config.json + semeia binários de túnel
-│   └── java-select                 # wrapper: escolhe JDK 8/17/21 pelo MC version
-├── Dockerfile                      # imagem: Node 20 + JDK 8/17/21 + túneis
+│   └── java-select                 # wrapper: escolhe JDK 8/17/21/25 pelo MC version
+├── Dockerfile                      # imagem: Node 22 + JDK 8/17/21/25 + túneis
 ├── docker-compose.yml              # compose pronto (volumes, portas 25565-75, envs)
 ├── packages.extra                  # pacotes extras do ambiente live
 ├── scripts/build-in-container.sh   # monta a ISO (roda dentro do container Arch)
