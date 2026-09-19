@@ -1,262 +1,756 @@
 #!/usr/bin/env bash
 #
-# mc-install — instalador do appliance de servidor Minecraft (Arch Linux)
-# Boota, roda sozinho, e no fim entrega uma maquina dedicada a rodar MC.
+# mc-install — instalador do craftbox (appliance de servidor Minecraft, Arch Linux)
+#
+# Assistente em tela cheia no estilo do instalador do Ubuntu Server: uma tela por
+# etapa (Continuar/Voltar), nada é gravado no disco até a confirmação final, e a
+# instalação roda com uma tela de progresso + log completo em /tmp.
+#
+#   mc-install              instala de verdade (APAGA o disco escolhido no fim)
+#   mc-install --dry-run    percorre todas as telas e SIMULA a instalação (não toca em nada)
 #
 set -uo pipefail
 
-# ---------------------------------------------------------------------------
-# helpers de UI
-# ---------------------------------------------------------------------------
-c_reset=$'\e[0m'; c_bold=$'\e[1m'; c_green=$'\e[32m'; c_yellow=$'\e[33m'
-c_red=$'\e[31m'; c_blue=$'\e[36m'
-say()  { printf '%s\n' "${c_blue}==>${c_reset} ${c_bold}$*${c_reset}"; }
-ok()   { printf '%s\n' "${c_green}  ok:${c_reset} $*"; }
-warn() { printf '%s\n' "${c_yellow}  aviso:${c_reset} $*"; }
-die()  { printf '%s\n' "${c_red}  ERRO:${c_reset} $*" >&2; exit 1; }
-ask()  { local p="$1" d="${2:-}" r; if [ -n "$d" ]; then read -rp "  $p [$d]: " r; echo "${r:-$d}"; else read -rp "  $p: " r; echo "$r"; fi; }
-askpw(){ local p="$1" r; read -rsp "  $p: " r; echo >&2; printf '%s' "$r"; }
-yesno(){ local p="$1" d="${2:-s}" r; read -rp "  $p (s/n) [$d]: " r; r="${r:-$d}"; [[ "$r" =~ ^[sSyY] ]]; }
+CB_VERSION="1.0"
+DRYRUN=false
+[ "${1:-}" = "--dry-run" ] && DRYRUN=true
+DIALOG=${DIALOG:-dialog}
+LOG=${CB_LOG:-/tmp/craftbox-install.log}
+STATE=/tmp/craftbox-install.state
+UA="mc-install/$CB_VERSION (github.com/Vascon11/craftbox)"
+export LANG=${LANG:-C.UTF-8}
+NL=$'\n'
 
-clear
-cat <<'BANNER'
-  ================================================================
-   INSTALADOR — Servidor Minecraft (Arch Linux appliance)
-   Dell Inspiron 3442  ·  i5-4210U  ·  build vascon1
-  ================================================================
-BANNER
-echo
-warn "Este processo APAGA um disco inteiro. Leia cada passo com atencao."
-echo
-yesno "Quer continuar?" s || { echo "Cancelado."; exec bash; }
+# escolhas do usuário (preenchidas pelas telas)
+KEYMAP=br-abnt2
+WIFI_IF=""; WIFI_SSID=""; WIFI_PASS=""; WIFI_HIDDEN=false
+STATIC_IF=""; STATIC_ADDR=""; STATIC_GW=""; STATIC_DNS="1.1.1.1,8.8.8.8"
+DISK=""; P1=""; P2=""
+FULLNAME=""; SRV_HOST="craftbox"; USERNAME=""; USERPW=""
+SSH_KEYS=""; SSH_PWAUTH=true
+MCTYPE=paper; MCVER=""; SRVNAME="Principal"; MC_MOTD="Um servidor craftbox"; MC_MAXP=8; MC_DIFF=normal
+OPTIMIZE=true; EULA=false
+PANELPW=""; PANEL_SAME=true
 
 # ---------------------------------------------------------------------------
-# 1) Rede (precisa de internet pra baixar sistema + Minecraft)
+# visual (dialog) — paleta inspirada no instalador do Ubuntu Server
 # ---------------------------------------------------------------------------
-setup_net() {
-  say "Configurando rede"
-  if ping -c1 -W3 archlinux.org &>/dev/null; then ok "Internet ja disponivel (cabo/DHCP)"; return 0; fi
-  warn "Sem internet automatica. Vamos configurar."
-  local wl; wl=$(ls /sys/class/net 2>/dev/null | grep -E '^wl' | head -1 || true)
-  if [ -z "$wl" ]; then
-    die "Nenhuma placa Wi-Fi encontrada e o cabo nao deu internet. Conecte o cabo de rede e reinicie."
-  fi
-  ok "Placa Wi-Fi: $wl"
-  local ssid pass
-  ssid=$(ask "Nome da rede Wi-Fi (SSID)")
-  pass=$(askpw "Senha do Wi-Fi")
-  say "Conectando em '$ssid'..."
-  iwctl --passphrase "$pass" station "$wl" connect "$ssid" || warn "iwctl retornou erro, testando mesmo assim..."
-  for i in $(seq 1 15); do ping -c1 -W2 archlinux.org &>/dev/null && break; sleep 1; done
-  ping -c1 -W3 archlinux.org &>/dev/null || die "Nao consegui internet pelo Wi-Fi. Confira SSID/senha."
-  ok "Conectado. (guardo essa rede pro sistema instalado)"
-  WIFI_SSID="$ssid"; WIFI_PASS="$pass"
+DW=76; DH=21
+fit_screen() {
+  local c l; c=$(tput cols 2>/dev/null || echo 80); l=$(tput lines 2>/dev/null || echo 25)
+  DW=$(( c - 4 < 76 ? c - 4 : 76 )); DH=$(( l - 4 < 21 ? l - 4 : 21 ))
 }
-WIFI_SSID=""; WIFI_PASS=""
-setup_net
-
-# sincroniza relogio (importante pra TLS/downloads)
-timedatectl set-ntp true 2>/dev/null || true
-
-# ---------------------------------------------------------------------------
-# 2) Disco de destino
-# ---------------------------------------------------------------------------
-say "Discos disponiveis:"
-lsblk -dpo NAME,SIZE,MODEL | grep -vE 'loop|sr0'
-echo
-DISK=$(ask "Disco onde instalar (CUIDADO: sera apagado)" "/dev/sda")
-[ -b "$DISK" ] || die "Disco $DISK nao existe."
-echo
-warn "TUDO em $DISK sera destruido:"
-lsblk "$DISK"
-echo
-yesno "Confirma apagar $DISK inteiro?" n || die "Abortado pelo usuario."
-
-# ---------------------------------------------------------------------------
-# 3) Perguntas de configuracao
-# ---------------------------------------------------------------------------
-say "Configuracao do sistema"
-HOSTNAME=$(ask "Nome da maquina (hostname)" "mc-server")
-USERNAME=$(ask "Seu usuario (login SSH)" "vascon1")
-while :; do
-  USERPW=$(askpw "Senha do usuario $USERNAME")
-  USERPW2=$(askpw "Repita a senha")
-  [ "$USERPW" = "$USERPW2" ] && [ -n "$USERPW" ] && break
-  warn "Senhas nao batem ou vazia, tente de novo."
-done
-SSHKEY=$(ask "Cole sua chave SSH publica (opcional, enter pra pular)" "")
-
-say "Configuracao do Minecraft"
-echo "  1) Paper  (plugins - leve, recomendado pro seu hardware)"
-echo "  2) Fabric (mods - mais pesado, voce e amigos instalam mods no cliente)"
-MCTYPE=""
-while [ -z "$MCTYPE" ]; do
-  case "$(ask "Escolha o tipo de servidor" "1")" in
-    1) MCTYPE="paper" ;;
-    2) MCTYPE="fabric" ;;
-    *) warn "Digite 1 ou 2." ;;
-  esac
-done
-MCVER=$(ask "Versao do Minecraft (enter = ultima estavel)" "latest")
-SRVNAME=$(ask "Nome do primeiro servidor" "Principal")
-MC_MOTD=$(ask "Mensagem do servidor (MOTD)" "Servidor do vascon1 e amigos")
-MC_MAXP=$(ask "Maximo de jogadores" "8")
-MC_DIFF=$(ask "Dificuldade (peaceful/easy/normal/hard)" "normal")
-echo
-echo "  Otimizacoes: instala mods de performance (Fabric) e ajusta view/simulation"
-echo "  distance pra CPU fraca. Se preferir, deixo vanilla e voce ajusta pelo painel."
-if yesno "Instalar otimizacoes pra hardware fraco?" s; then OPTIMIZE="true"; else OPTIMIZE="false"; fi
-echo
-say "Painel web (craftbox-panel)"
-while :; do
-  PANELPW=$(askpw "Defina a senha do painel web")
-  PANELPW2=$(askpw "Repita a senha do painel")
-  [ "$PANELPW" = "$PANELPW2" ] && [ -n "$PANELPW" ] && break
-  warn "Senhas nao batem ou vazia, tente de novo."
-done
-echo
-warn "Voce precisa ACEITAR a EULA da Mojang pra rodar o servidor:"
-echo "  https://aka.ms/MinecraftEULA"
-EULA="false"
-if yesno "Aceita a EULA da Mojang?" s; then EULA="true"; else warn "Sem aceitar a EULA, o servidor nao inicia (deixo instalado mas parado)."; fi
-
-# calcula heap (RAM) automaticamente
-TOTAL_MB=$(free -m | awk '/^Mem:/{print $2}')
-HEAP=$(( TOTAL_MB - 2048 ))
-[ "$HEAP" -lt 1024 ] && HEAP=1024
-[ "$HEAP" -gt 6144 ] && HEAP=6144
-ok "RAM detectada: ${TOTAL_MB}MB  ->  heap do Minecraft: ${HEAP}MB (Xms=Xmx)"
-echo
-say "Resumo:"
-echo "  Disco:      $DISK  (SERA APAGADO)"
-echo "  Hostname:   $HOSTNAME"
-echo "  Usuario:    $USERNAME"
-echo "  Servidor:   $MCTYPE  versao=$MCVER  heap=${HEAP}MB"
-echo "  Otimizado:  $OPTIMIZE"
-echo "  EULA:       $EULA"
-echo
-yesno "Tudo certo? Iniciar instalacao?" n || die "Abortado."
-
-# ---------------------------------------------------------------------------
-# 4) Particionamento (UEFI: ESP + root ext4)
-# ---------------------------------------------------------------------------
-say "Particionando $DISK"
-wipefs -af "$DISK"
-sgdisk -Z "$DISK"
-sgdisk -n1:0:+512M -t1:ef00 -c1:ESP "$DISK"
-sgdisk -n2:0:0     -t2:8300 -c2:root "$DISK"
-partprobe "$DISK"; sleep 2
-if [[ "$DISK" == *nvme* || "$DISK" == *mmcblk* ]]; then P1="${DISK}p1"; P2="${DISK}p2"; else P1="${DISK}1"; P2="${DISK}2"; fi
-ok "ESP=$P1  root=$P2"
-
-say "Formatando"
-mkfs.fat -F32 -n ESP "$P1"
-mkfs.ext4 -F -L root "$P2"
-
-say "Montando"
-mount "$P2" /mnt
-mkdir -p /mnt/boot
-mount "$P1" /mnt/boot
-
-# ---------------------------------------------------------------------------
-# 5) Instalacao do sistema base
-# ---------------------------------------------------------------------------
-say "Instalando sistema base (isso demora um pouco no HD)"
-pacstrap -K /mnt \
-  base linux linux-firmware mkinitcpio intel-ucode \
-  networkmanager openssh sudo \
-  jre-openjdk-headless \
-  git tmux nano vim htop jq curl wget which nodejs \
-  msr-tools \
-  || die "pacstrap falhou (rede?)."
-
-say "Gerando fstab"
-genfstab -U /mnt >> /mnt/etc/fstab
-
-# ---------------------------------------------------------------------------
-# 6) Baixando o Minecraft (feito aqui no live, que tem curl+jq)
-# ---------------------------------------------------------------------------
-# layout multi-servidor: cada instancia e uma subpasta de /srv/minecraft
-SDIR=/srv/minecraft
-SRVID=$(printf '%s' "${SRVNAME:-Principal}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//;s/-*$//')
-[ -z "$SRVID" ] && SRVID=principal
-MCDIR=/mnt$SDIR/$SRVID
-mkdir -p "$MCDIR/mods" "$MCDIR/plugins" "$MCDIR/backups"
-echo "$MCTYPE" > "$MCDIR/.craftbox-loader"
-say "Baixando servidor ($MCTYPE)"
-UA="mc-install/1.0 (vascon1 minecraft appliance)"
-if [ "$MCTYPE" = "paper" ]; then
-  # API nova do Paper (fill v3); pega a ultima versao ESTAVEL (ignora rc/pre/snapshot)
-  if [ "$MCVER" = "latest" ]; then
-    MCVER=$(curl -fsSL -A "$UA" https://fill.papermc.io/v3/projects/paper \
-            | jq -r '[.versions[][] | select(test("-")|not)][0]')
+setup_theme() {
+  if [ "${TERM:-}" = linux ]; then
+    # fonte do console: a padrão (CP437) não tem ã/õ; Terminus tem, e fica maior/legível
+    local rows f; rows=$(tput lines 2>/dev/null || echo 25)
+    if (( rows >= 45 )); then f=ter-v24n; elif (( rows >= 34 )); then f=ter-v20n; else f=ter-v16n; fi
+    setfont "$f" 2>/dev/null || setfont eurlatgr 2>/dev/null || true
+    dmesg -n 1 2>/dev/null   # mensagens do kernel não pisam nas telas
   fi
-  DLINFO=$(curl -fsSL -A "$UA" "https://fill.papermc.io/v3/projects/paper/versions/$MCVER/builds/latest")
-  BUILD=$(echo "$DLINFO" | jq -r '.id')
-  URL=$(echo "$DLINFO"   | jq -r '.downloads."server:default".url')
-  if [ -n "$URL" ] && [ "$URL" != "null" ]; then
-    curl -fL --retry 3 -A "$UA" -o "$MCDIR/server.jar" "$URL" \
-      && ok "Paper $MCVER build $BUILD" || warn "Falha ao baixar Paper; baixe depois manualmente."
-  else
-    warn "Nao achei build de Paper pra versao '$MCVER'. Baixe depois manualmente em papermc.io/downloads"
+  if [ "${TERM:-}" = linux ]; then
+    printf '\e]P3E95420'   # "amarelo"  -> laranja do Ubuntu (destaques)
+    printf '\e]PBE95420'   # amarelo claro -> laranja
+    printf '\e]P4333333'   # "azul"     -> cinza escuro (campos de texto)
+    printf '\e]P0111111'   # preto      -> quase preto
   fi
-else
-  if [ "$MCVER" = "latest" ]; then
-    MCVER=$(curl -fsSL https://meta.fabricmc.net/v2/versions/game | jq -r '[.[]|select(.stable==true)][0].version')
-  fi
-  LOADER=$(curl -fsSL https://meta.fabricmc.net/v2/versions/loader | jq -r '[.[]|select(.stable==true)][0].version')
-  INST=$(curl -fsSL https://meta.fabricmc.net/v2/versions/installer | jq -r '[.[]|select(.stable==true)][0].version')
-  curl -fL --retry 3 -o "$MCDIR/server.jar" \
-    "https://meta.fabricmc.net/v2/versions/loader/$MCVER/$LOADER/$INST/server/jar" \
-    && ok "Fabric server $MCVER (loader $LOADER)" || warn "Falha ao baixar Fabric."
-  if [ "$OPTIMIZE" = "true" ]; then
-    say "Baixando mods de performance (best-effort)"
-    for slug in fabric-api lithium ferrite-core krypton c2me-fabric; do
-      url=$(curl -fsSL "https://api.modrinth.com/v2/project/$slug/version?loaders=%5B%22fabric%22%5D&game_versions=%5B%22$MCVER%22%5D" \
-            | jq -r '.[0].files[]? | select(.primary==true) | .url' 2>/dev/null | head -1)
-      if [ -n "${url:-}" ] && [ "$url" != "null" ]; then
-        curl -fL --retry 2 -o "$MCDIR/mods/$slug.jar" "$url" && ok "mod: $slug" || warn "pulei $slug"
+  local rc=/tmp/craftbox-dialogrc
+  cat > "$rc" <<'EOF'
+use_shadow = OFF
+use_colors = ON
+screen_color = (WHITE,BLACK,ON)
+shadow_color = (BLACK,BLACK,ON)
+dialog_color = (WHITE,BLACK,OFF)
+title_color = (YELLOW,BLACK,ON)
+border_color = (WHITE,BLACK,OFF)
+border2_color = (WHITE,BLACK,OFF)
+button_active_color = (WHITE,YELLOW,ON)
+button_inactive_color = (WHITE,BLACK,OFF)
+button_key_active_color = (WHITE,YELLOW,ON)
+button_key_inactive_color = (YELLOW,BLACK,ON)
+button_label_active_color = (WHITE,YELLOW,ON)
+button_label_inactive_color = (WHITE,BLACK,ON)
+inputbox_color = (WHITE,BLUE,ON)
+inputbox_border_color = (WHITE,BLACK,OFF)
+inputbox_border2_color = (WHITE,BLACK,OFF)
+searchbox_color = (WHITE,BLACK,OFF)
+searchbox_title_color = (YELLOW,BLACK,ON)
+searchbox_border_color = (WHITE,BLACK,OFF)
+searchbox_border2_color = (WHITE,BLACK,OFF)
+position_indicator_color = (YELLOW,BLACK,ON)
+menubox_color = (WHITE,BLACK,OFF)
+menubox_border_color = (WHITE,BLACK,OFF)
+menubox_border2_color = (WHITE,BLACK,OFF)
+item_color = (WHITE,BLACK,OFF)
+item_selected_color = (WHITE,YELLOW,ON)
+tag_color = (WHITE,BLACK,ON)
+tag_selected_color = (WHITE,YELLOW,ON)
+tag_key_color = (WHITE,BLACK,ON)
+tag_key_selected_color = (WHITE,YELLOW,ON)
+check_color = (WHITE,BLACK,OFF)
+check_selected_color = (WHITE,YELLOW,ON)
+uarrow_color = (YELLOW,BLACK,ON)
+darrow_color = (YELLOW,BLACK,ON)
+itemhelp_color = (WHITE,BLACK,OFF)
+form_active_text_color = (WHITE,YELLOW,ON)
+form_text_color = (WHITE,BLUE,ON)
+form_item_readonly_color = (WHITE,BLACK,OFF)
+gauge_color = (YELLOW,BLUE,OFF)
+EOF
+  export DIALOGRC=$rc
+}
+EXIT_MSG=""
+restore_screen() { [ "${TERM:-}" = linux ] && printf '\e]R'; clear; [ -n "$EXIT_MSG" ] && echo "$EXIT_MSG"; }
+trap restore_screen EXIT
+
+BT=""; STEP_NO=0; STEP_N=0
+bt() { BT="craftbox $CB_VERSION  ·  Instalador$($DRYRUN && echo '  ·  SIMULAÇÃO')      passo $STEP_NO de $STEP_N: $1"; }
+# dialog com a escolha no stdout; código 0=ok 1=voltar 3=extra 255=esc
+# altura 0 = calcula pelo conteúdo (o auto-size do dialog erra com --cr-wrap)
+D() {
+  local -a a=("$@"); local i l n t
+  for i in "${!a[@]}"; do
+    case "${a[i]}" in --menu|--yesno|--msgbox)
+      [ "${a[i+2]:-}" = 0 ] || continue
+      t=${a[i+1]//\\n/$NL}; l=$(printf '%s' "$t" | wc -l)
+      if [ "${a[i]}" = --menu ]; then
+        n=$(( (${#a[@]} - i - 5) / 2 )); a[i+2]=$(( l + n + 6 ))
+        if (( a[i+2] > DH )); then a[i+2]=$DH; n=$(( DH - l - 6 )); (( n < 2 )) && n=2; fi
+        a[i+4]=$n
       else
-        warn "sem build de '$slug' pra $MCVER, pulei"
+        a[i+2]=$(( l + 5 )); (( a[i+2] > DH )) && a[i+2]=$DH
+      fi ;;
+    esac
+  done
+  "$DIALOG" --backtitle "$BT" --colors --no-collapse --cr-wrap "${a[@]}" 3>&1 1>&2 2>&3
+}
+msg() { D --title " ${2:-Aviso} " --ok-label "Ok" --msgbox "\n$1\n" "${3:-0}" "$DW"; }
+
+# roda uma lista de telas; cada tela retorna 0 (avançar) ou !=0 (voltar)
+wizard() {
+  local -a steps=("$@"); local i=0 n=${#steps[@]}
+  while (( i < n )); do
+    if "${steps[i]}"; then i=$((i + 1)); else (( i == 0 )) && return 1; i=$((i - 1)); fi
+  done
+}
+# WIZ_START: índice da tela inicial (usado pra voltar direto ao resumo depois de um erro)
+top_wizard() {
+  local -a steps=("$@"); local i=${WIZ_START:-0} n=${#steps[@]}
+  STEP_N=$n
+  while (( i < n )); do
+    STEP_NO=$((i + 1))
+    if "${steps[i]}"; then i=$((i + 1)); else (( i > 0 )) && i=$((i - 1)); fi
+  done
+}
+
+# ---------------------------------------------------------------------------
+# utilidades
+# ---------------------------------------------------------------------------
+net_online() { curl -fsS -m 6 -o /dev/null https://archlinux.org 2>/dev/null || ping -c1 -W3 1.1.1.1 >/dev/null 2>&1; }
+net_ifaces() { local i; for i in $(ls /sys/class/net 2>/dev/null); do case "$i" in en*|eth*|wl*) echo "$i";; esac; done; }
+if_ip() { ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4}' | head -1; }
+if_gw() { ip -4 route show default dev "$1" 2>/dev/null | awk '{print $3; exit}'; }
+valid_cidr() { [[ $1 =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] && (( BASH_REMATCH[1] < 256 && BASH_REMATCH[2] < 256 && BASH_REMATCH[3] < 256 && BASH_REMATCH[4] < 256 && BASH_REMATCH[5] <= 32 )); }
+valid_ip() { valid_cidr "$1/32"; }
+# disco de onde o live bootou (não pode ser o alvo)
+live_disk() { local src; src=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null) || return 0; [ -n "$src" ] && lsblk -no PKNAME "$src" 2>/dev/null | head -1 | sed 's|^|/dev/|'; }
+human_ram() { free -m | awk '/^Mem:/{printf "%.1f GB", $2/1024}'; }
+heap_mb() { local t h; t=$(free -m | awk '/^Mem:/{print $2}'); h=$(( t - 2048 )); (( h < 1024 )) && h=1024; (( h > 6144 )) && h=6144; echo "$h"; }
+part_names() { if [[ "$DISK" == *nvme* || "$DISK" == *mmcblk* ]]; then P1="${DISK}p1"; P2="${DISK}p2"; else P1="${DISK}1"; P2="${DISK}2"; fi; }
+
+# ---------------------------------------------------------------------------
+# 1) Bem-vindo
+# ---------------------------------------------------------------------------
+scr_welcome() {
+  bt "Bem-vindo"
+  local cpu fw c
+  cpu=$(awk -F: '/model name/{print $2; exit}' /proc/cpuinfo | sed 's/^ *//;s/(R)//g;s/(TM)//g;s/ CPU//;s/  */ /g')
+  if [ -d /sys/firmware/efi ]; then fw="UEFI"; else fw="BIOS legado (\Z1não suportado\Zn)"; fi
+  while :; do
+    c=$(D --title " Bem-vindo ao craftbox! " --no-tags --no-cancel --ok-label "Selecionar" --menu \
+"
+Este assistente transforma esta máquina num servidor de Minecraft
+dedicado: sistema enxuto, painel web, backups diários e acesso SSH.
+
+   Processador:  ${cpu:-?}
+   Memória:      $(human_ram)
+   Firmware:     $fw
+
+Nada é gravado no disco até você confirmar no final.
+Use as \Zbsetas\Zn, \ZbEnter\Zn para escolher e \ZbTab\Zn para trocar de botão.
+" 0 "$DW" 0 \
+      instalar "Instalar o craftbox" \
+      terminal "Abrir um terminal (modo avançado)" \
+      desligar "Desligar a máquina") || continue
+    case "$c" in
+      instalar)
+        if [ ! -d /sys/firmware/efi ] && ! $DRYRUN; then
+          msg "Esta máquina bootou em modo \ZbBIOS legado\Zn.\n\nO craftbox precisa de \ZbUEFI\Zn: entre no setup da BIOS, ative o modo UEFI (desligando o Legacy/CSM) e dê boot pelo pendrive de novo." "Modo de boot não suportado"
+          continue
+        fi
+        return 0 ;;
+      terminal) EXIT_MSG="Para voltar ao instalador, digite: mc-install"; exit 0 ;;
+      desligar) $DRYRUN && exit 0; poweroff ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
+# 2) Teclado
+# ---------------------------------------------------------------------------
+scr_keyboard() {
+  bt "Teclado"
+  local k
+  while :; do
+    k=$(D --title " Layout do teclado " --ok-label "Continuar" --cancel-label "Voltar" --default-item "$KEYMAP" --menu \
+"
+Escolha o layout do seu teclado. Ele passa a valer na hora, e você
+vai poder testar na próxima tela.
+" 0 "$DW" 0 \
+      br-abnt2   "Português (Brasil) — ABNT2, com a tecla Ç" \
+      us-acentos "Inglês (EUA) internacional, com acentos" \
+      us         "Inglês (EUA)" \
+      pt-latin1  "Português (Portugal)" \
+      es         "Espanhol" \
+      uk         "Inglês (Reino Unido)" \
+      fr-latin1  "Francês" \
+      de-latin1  "Alemão") || return 1
+    KEYMAP=$k
+    $DRYRUN || loadkeys "$KEYMAP" >/dev/null 2>&1
+    D --title " Testar o teclado " --ok-label "Está certo" --cancel-label "Trocar layout" --inputbox \
+"
+Digite alguns caracteres especiais (ç ã é / ? ;) para conferir se o
+layout está certo. O texto não é salvo.
+" 10 "$DW" "" >/dev/null && return 0
+  done
+}
+
+# ---------------------------------------------------------------------------
+# 3) Rede
+# ---------------------------------------------------------------------------
+net_table() {
+  local i typ st ip mode ssid
+  echo "  INTERFACE    TIPO    ESTADO     ENDEREÇO            MODO"   # literal: printf conta bytes e o Ç desalinha
+  for i in $(net_ifaces); do
+    case "$i" in wl*) typ="Wi-Fi";; *) typ="Cabo";; esac
+    st=$(cat "/sys/class/net/$i/operstate" 2>/dev/null)
+    case "$st" in up) st="ligada";; down) st="desligada";; *) st="—";; esac
+    ip=$(if_ip "$i")
+    mode="DHCP"; [ "$i" = "$STATIC_IF" ] && mode="IP fixo"
+    ssid=""; [ "$i" = "$WIFI_IF" ] && [ -n "$WIFI_SSID" ] && ssid=" ($WIFI_SSID)"
+    printf '  %-12s %-7s %-10s %-19s %s\n' "$i" "$typ" "$st" "${ip:-sem IP}" "$mode$ssid"
+  done
+}
+wifi_connect() {
+  local wl ssid pass line sec sig c k
+  wl=$(net_ifaces | grep '^wl' | head -1)
+  [ -z "$wl" ] && { msg "Nenhuma placa Wi-Fi foi encontrada. Use o cabo de rede."; return; }
+  D --title " Wi-Fi " --infobox "\n  Procurando redes Wi-Fi..." 5 40
+  local -a items=()
+  if ! $DRYRUN; then
+    iwctl station "$wl" scan >/dev/null 2>&1; sleep 4
+    while IFS= read -r line; do
+      line=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$line")
+      if [[ $line =~ ^[[:space:]]*(\>[[:space:]]+)?(.*[^[:space:]])[[:space:]]+(psk|open|8021x|wep)[[:space:]]+(\*+)[[:space:]]*$ ]]; then
+        ssid=${BASH_REMATCH[2]}; sec=${BASH_REMATCH[3]}; sig=${BASH_REMATCH[4]}
+        case "$sec" in psk) sec="com senha";; open) sec="aberta";; *) sec="$sec (não suportada)";; esac
+        items+=("$ssid" "$(printf '%-5s %s' "$sig" "$sec")")
       fi
-    done
+    done < <(iwctl station "$wl" get-networks 2>/dev/null)
   else
-    warn "modo limpo: Fabric sem mods de performance (instale pelo painel quando quiser)"
+    items+=("Casa 5G" "****  com senha" "Vizinho" "**    com senha")
   fi
-fi
+  items+=("<outra>" "Rede oculta (digitar o nome)")
+  c=$(D --title " Redes Wi-Fi em $wl " --ok-label "Conectar" --cancel-label "Voltar" --menu "\nEscolha a rede:\n" 0 "$DW" 0 "${items[@]}") || return
+  WIFI_HIDDEN=false
+  if [ "$c" = "<outra>" ]; then
+    c=$(D --title " Rede oculta " --ok-label "Continuar" --cancel-label "Voltar" --inputbox "\nNome da rede (SSID):\n" 10 "$DW" "") || return
+    [ -z "$c" ] && return
+    WIFI_HIDDEN=true
+  fi
+  pass=$(D --title " Senha de \"$c\" " --ok-label "Conectar" --cancel-label "Voltar" --insecure --passwordbox "\nSenha do Wi-Fi (deixe vazio se a rede for aberta):\n" 10 "$DW") || return
+  D --title " Wi-Fi " --infobox "\n  Conectando em \"$c\"..." 5 50
+  if ! $DRYRUN; then
+    local -a args=(); [ -n "$pass" ] && args=(--passphrase "$pass")
+    if $WIFI_HIDDEN; then iwctl "${args[@]}" station "$wl" connect-hidden "$c" >/dev/null 2>&1
+    else iwctl "${args[@]}" station "$wl" connect "$c" >/dev/null 2>&1; fi
+    for k in $(seq 1 20); do net_online && break; sleep 1; done
+  else sleep 1; fi
+  if $DRYRUN || net_online; then
+    WIFI_IF=$wl; WIFI_SSID=$c; WIFI_PASS=$pass
+    msg "Conectado em \"$c\". Essa rede fica salva no sistema instalado." "Wi-Fi"
+  else
+    msg "Não consegui internet pela rede \"$c\".\n\nConfira a senha e se o sinal está bom, ou use o cabo de rede." "Wi-Fi"
+  fi
+}
+static_apply_live() {
+  $DRYRUN && return
+  mkdir -p /run/systemd/network
+  { printf '[Match]\nName=%s\n\n[Network]\nAddress=%s\nGateway=%s\n' "$STATIC_IF" "$STATIC_ADDR" "$STATIC_GW"
+    local d; for d in ${STATIC_DNS//,/ }; do printf 'DNS=%s\n' "$d"; done
+  } > /run/systemd/network/10-craftbox-static.network
+  networkctl reload >/dev/null 2>&1; networkctl reconfigure "$STATIC_IF" >/dev/null 2>&1; sleep 3
+}
+static_ip() {
+  local -a ifs items=() v; local i ifc vals ok d
+  mapfile -t ifs < <(net_ifaces)
+  [ ${#ifs[@]} -eq 0 ] && { msg "Nenhuma interface de rede encontrada."; return; }
+  if [ ${#ifs[@]} -eq 1 ]; then ifc=${ifs[0]}
+  else
+    for i in "${ifs[@]}"; do items+=("$i" "$(if_ip "$i")"); done
+    ifc=$(D --title " IP fixo " --ok-label "Continuar" --cancel-label "Voltar" --menu "\nEm qual interface?\n" 0 "$DW" 0 "${items[@]}") || return
+  fi
+  local addr=${STATIC_ADDR:-$(if_ip "$ifc")} gw=${STATIC_GW:-$(if_gw "$ifc")} dns=$STATIC_DNS
+  while :; do
+    vals=$(D --title " IP fixo — $ifc " --ok-label "Salvar" --cancel-label "Voltar" --form \
+"
+Com IP fixo o servidor tem sempre o mesmo endereço na rede local: é
+o que você usa no redirecionamento de portas do roteador. Escolha um
+endereço fora da faixa de DHCP do roteador. No DNS, separe com vírgula.
+" 13 "$DW" 3 \
+      "        Endereço/prefixo:" 1 1 "$addr" 1 27 22 18 \
+      "     Gateway (roteador):" 2 1 "$gw"   2 27 22 15 \
+      "         Servidores DNS:" 3 1 "$dns"  3 27 40 64) || return
+    mapfile -t v <<<"$vals"; addr=${v[0]:-}; gw=${v[1]:-}; dns=${v[2]:-}
+    if ! valid_cidr "$addr"; then msg "Endereço inválido: use o formato \Zb192.168.0.50/24\Zn."; continue; fi
+    if ! valid_ip "$gw"; then msg "Gateway inválido (ex: \Zb192.168.0.1\Zn)."; continue; fi
+    ok=true; for d in ${dns//,/ }; do valid_ip "$d" || ok=false; done
+    if ! $ok || [ -z "$dns" ]; then msg "DNS inválido (ex: \Zb1.1.1.1,8.8.8.8\Zn)."; continue; fi
+    break
+  done
+  STATIC_IF=$ifc; STATIC_ADDR=$addr; STATIC_GW=$gw; STATIC_DNS=$dns
+  D --infobox "\n  Aplicando o IP fixo..." 5 40
+  static_apply_live
+}
+static_off() {
+  STATIC_IF=""; STATIC_ADDR=""; STATIC_GW=""
+  $DRYRUN && return
+  rm -f /run/systemd/network/10-craftbox-static.network
+  networkctl reload >/dev/null 2>&1; local i; for i in $(net_ifaces); do networkctl reconfigure "$i" >/dev/null 2>&1; done; sleep 3
+}
+scr_network() {
+  bt "Rede"
+  local online c status
+  while :; do
+    D --infobox "\n  Testando a conexão com a internet..." 5 46
+    if $DRYRUN || net_online; then online=true; status="\Z2\ZbConectado à internet.\Zn"
+    else online=false; status="\Z1\ZbSem internet.\Zn A instalação baixa o sistema e o Minecraft, então precisa de rede."; fi
+    local -a items=()
+    $online && items+=(continuar "Continuar")
+    net_ifaces | grep -q '^wl' && items+=(wifi "Conectar a uma rede Wi-Fi")
+    items+=(ipfixo "Configurar IP fixo (recomendado para servidor)")
+    [ -n "$STATIC_IF" ] && items+=(dhcp "Voltar para IP automático (DHCP)")
+    items+=(testar "Testar a conexão de novo")
+    c=$(D --title " Conexões de rede " --no-tags --ok-label "Selecionar" --cancel-label "Voltar" --menu \
+"
+$(net_table)
 
-# metadados da instancia (lidos pelo painel)
-cat > "$MCDIR/.craftbox-instance.json" <<EOF
-{ "name": "$SRVNAME", "loader": "$MCTYPE", "mcVersion": "$MCVER", "port": 25565, "createdAt": 0 }
-EOF
+$status
+" 0 "$DW" 0 "${items[@]}") || return 1
+    case "$c" in
+      continuar) return 0 ;;
+      wifi) wifi_connect ;;
+      ipfixo) static_ip ;;
+      dhcp) static_off ;;
+    esac
+  done
+}
 
-# arquivos de config do servidor
-cat > "$MCDIR/eula.txt" <<EOF
-# gerado pelo instalador — https://aka.ms/MinecraftEULA
-eula=$EULA
-EOF
+# ---------------------------------------------------------------------------
+# 4) Armazenamento
+# ---------------------------------------------------------------------------
+scr_storage() {
+  bt "Armazenamento"
+  local skip name size model fs c total existing
+  skip=$(live_disk)
+  while :; do
+    local -a items=()
+    while read -r name size model; do
+      [ "$name" = "$skip" ] && continue
+      fs=$(lsblk -nlo FSTYPE "$name" 2>/dev/null | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ $//')
+      [ -n "$fs" ] && fs="contém: $fs" || fs="vazio"
+      items+=("$name" "$(printf '%7s  %-20.20s  %.28s' "$size" "${model:-(sem nome)}" "$fs")")
+    done < <(lsblk -dnpo NAME,SIZE,MODEL -e 7,11,251 2>/dev/null | grep -v zram)
+    if [ ${#items[@]} -eq 0 ]; then msg "Nenhum disco foi encontrado para instalar." "Armazenamento"; return 1; fi
+    c=$(D --title " Onde instalar? " --ok-label "Continuar" --cancel-label "Voltar" ${DISK:+--default-item "$DISK"} --menu \
+"
+Escolha o disco. O craftbox usa o \Zbdisco inteiro\Zn: tudo o que houver
+nele (outros sistemas, arquivos) será apagado na hora de instalar.
+" 0 "$DW" 0 "${items[@]}") || return 1
+    DISK=$c; part_names
+    total=$(lsblk -dno SIZE "$DISK" | tr -d ' ')
+    existing=$(lsblk -lpo NAME,SIZE,FSTYPE,LABEL "$DISK" 2>/dev/null | sed '2d; s/^/    /')
+    [ "$(grep -c . <<<"$existing")" -le 1 ] && existing="    (disco vazio, sem partições)"
+    D --title " Resumo do armazenamento " --yes-label "Continuar" --no-label "Voltar" --yesno \
+"
+Disco: \Zb$DISK\Zn ($total)
 
-# distancias: modo otimizado usa valores menores (CPU fraca); modo limpo usa vanilla
-if [ "$OPTIMIZE" = "true" ]; then VDIST=6; SDIST=4; else VDIST=10; SDIST=10; fi
-cat > "$MCDIR/server.properties" <<EOF
+O que será criado:
+$(printf '    %-14s %8s  %-8s %s' "$P1" "512M" "FAT32" "/boot  (partição EFI)")
+$(printf '    %-14s %8s  %-8s %s' "$P2" "resto" "ext4" "/      (sistema + servidores)")
+    arquivo de swap de 2 GB em /swapfile
+
+\Z1\ZbSerá APAGADO:\Zn
+$existing
+" 0 "$DW" && return 0
+  done
+}
+
+# ---------------------------------------------------------------------------
+# 5) Perfil
+# ---------------------------------------------------------------------------
+scr_profile() {
+  bt "Perfil"
+  local vals p2; local -a v
+  while :; do
+    vals=$(D --title " Configuração do perfil " --ok-label "Continuar" --cancel-label "Voltar" --insecure --mixedform \
+"
+Digite o usuário e a senha que você vai usar para entrar na máquina
+(pelo SSH ou direto no teclado). O nome do servidor identifica a
+máquina na rede.
+" 15 "$DW" 5 \
+      "               Seu nome:" 1 1 "$FULLNAME" 1 26 40 64 0 \
+      "       Nome do servidor:" 2 1 "$SRV_HOST" 2 26 40 63 0 \
+      "        Nome de usuário:" 3 1 "$USERNAME" 3 26 40 32 0 \
+      "                  Senha:" 4 1 "" 4 26 40 128 1 \
+      "       Confirme a senha:" 5 1 "" 5 26 40 128 1) || return 1
+    mapfile -t v <<<"$vals"
+    FULLNAME=${v[0]:-}; SRV_HOST=${v[1]:-}; USERNAME=${v[2]:-}; USERPW=${v[3]:-}; p2=${v[4]:-}
+    FULLNAME=${FULLNAME//[:\\]/}
+    if ! [[ $SRV_HOST =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+      msg "Nome do servidor inválido.\n\nUse só letras minúsculas, números e hífen (ex: \Zbcraftbox\Zn ou \Zbmc-casa\Zn)."; continue; fi
+    if ! [[ $USERNAME =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+      msg "Nome de usuário inválido.\n\nUse letras minúsculas, números, _ ou -, começando por letra (ex: \Zbjoao\Zn)."; continue; fi
+    case "$USERNAME" in root|minecraft|bin|daemon|nobody|mail|ftp|http|git) msg "O usuário \Zb$USERNAME\Zn é reservado pelo sistema. Escolha outro."; continue;; esac
+    if [ ${#USERPW} -lt 6 ]; then msg "A senha precisa ter pelo menos 6 caracteres."; continue; fi
+    if [ "$USERPW" != "$p2" ]; then msg "As senhas não batem. Digite de novo."; continue; fi
+    $PANEL_SAME && PANELPW=$USERPW
+    return 0
+  done
+}
+
+# ---------------------------------------------------------------------------
+# 6) SSH
+# ---------------------------------------------------------------------------
+ssh_count() { if [ -z "$SSH_KEYS" ]; then echo 0; else grep -c . <<<"$SSH_KEYS"; fi; }
+ssh_add_keys() {
+  local keys=$1 fp n
+  fp=$(ssh-keygen -lf <(printf '%s\n' "$keys") 2>/dev/null | awk '{print "   " $1 " " $2 " " $NF}')
+  [ -z "$fp" ] && { msg "Não reconheci nenhuma chave SSH válida."; return; }
+  n=$(grep -c . <<<"$fp")
+  D --title " Confirmar chaves " --yes-label "Importar" --no-label "Voltar" --yesno "\nEncontrei $n chave(s):\n\n$fp\n" 0 "$DW" || return
+  SSH_KEYS=$(printf '%s\n%s\n' "$SSH_KEYS" "$keys" | grep -E '^(ssh-|ecdsa-|sk-)' | sort -u)
+}
+scr_ssh() {
+  bt "SSH"
+  local c u keys pwl
+  while :; do
+    if $SSH_PWAUTH; then pwl="\Z2permitido\Zn"; else pwl="\Z1bloqueado\Zn (só chave)"; fi
+    local -a items=(continuar "Continuar" github "Importar chaves do GitHub" colar "Colar uma chave pública")
+    [ "$(ssh_count)" -gt 0 ] && items+=(senha "Permitir/bloquear login SSH com senha" limpar "Remover as chaves importadas")
+    c=$(D --title " Acesso SSH " --no-tags --ok-label "Selecionar" --cancel-label "Voltar" --menu \
+"
+O servidor OpenSSH já vem instalado: é por ele que você administra a
+máquina de outro computador (ssh usuario@ip).
+
+Com uma \Zbchave SSH\Zn você entra sem digitar senha. O jeito mais fácil é
+importar as chaves públicas da sua conta do GitHub.
+
+   Chaves importadas:     $(ssh_count)
+   Login SSH com senha:   $pwl
+" 0 "$DW" 0 "${items[@]}") || return 1
+    case "$c" in
+      continuar) return 0 ;;
+      github)
+        u=$(D --title " Importar do GitHub " --ok-label "Buscar" --cancel-label "Voltar" --inputbox "\nSeu usuário do GitHub:\n" 10 "$DW" "") || continue
+        [[ $u =~ ^[A-Za-z0-9-]{1,39}$ ]] || { msg "Usuário do GitHub inválido."; continue; }
+        D --infobox "\n  Buscando as chaves de $u..." 5 50
+        keys=$(curl -fsSL -m 15 -A "$UA" "https://github.com/$u.keys" 2>/dev/null)
+        [ -z "$keys" ] && { msg "Não achei chaves públicas no GitHub para \Zb$u\Zn.\n\n(Confira em https://github.com/$u.keys)"; continue; }
+        ssh_add_keys "$keys" ;;
+      colar)
+        keys=$(D --title " Colar chave pública " --ok-label "Adicionar" --cancel-label "Voltar" --inputbox "\nCole a chave (começa com ssh-ed25519, ssh-rsa, ecdsa-...):\n" 10 "$DW" "") || continue
+        ssh_add_keys "$keys" ;;
+      senha) if $SSH_PWAUTH; then SSH_PWAUTH=false; else SSH_PWAUTH=true; fi ;;
+      limpar) SSH_KEYS=""; SSH_PWAUTH=true ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
+# 7) Minecraft (subetapas)
+# ---------------------------------------------------------------------------
+declare -A VCACHE=()
+mc_versions() {
+  if [ -z "${VCACHE[$MCTYPE]:-}" ]; then
+    D --infobox "\n  Buscando versões do Minecraft..." 5 46
+    if [ "$MCTYPE" = paper ]; then
+      VCACHE[$MCTYPE]=$(curl -fsSL -m 15 -A "$UA" https://fill.papermc.io/v3/projects/paper | jq -r '[.versions[][] | select(test("-")|not)][:20][]' 2>/dev/null)
+    else
+      VCACHE[$MCTYPE]=$(curl -fsSL -m 15 -A "$UA" https://meta.fabricmc.net/v2/versions/game | jq -r '[.[]|select(.stable==true)][:20][].version' 2>/dev/null)
+    fi
+  fi
+  printf '%s' "${VCACHE[$MCTYPE]}"
+}
+mc_type() {
+  local c
+  c=$(D --title " Tipo de servidor " --no-tags --ok-label "Continuar" --cancel-label "Voltar" --default-item "$MCTYPE" --menu \
+"
+Qual servidor de Minecraft instalar primeiro?
+
+Depois da instalação, o painel web cria outros servidores quando você
+quiser, inclusive \ZbForge\Zn, \ZbNeoForge\Zn e \Zbmodpacks\Zn do Modrinth/CurseForge.
+" 0 "$DW" 0 \
+    paper  "Paper: plugins, leve (recomendado para PC fraco)" \
+    fabric "Fabric: mods (os jogadores instalam os mesmos mods)") || return 1
+  [ "$c" != "$MCTYPE" ] && MCVER=""
+  MCTYPE=$c
+}
+mc_version() {
+  local list c v first=""
+  list=$(mc_versions)
+  if [ -z "$list" ]; then
+    c=$(D --title " Versão do Minecraft " --ok-label "Continuar" --cancel-label "Voltar" --inputbox "\nNão consegui buscar a lista de versões. Digite a versão (ex: 1.21.1):\n" 10 "$DW" "$MCVER") || return 1
+    [ -z "$c" ] && return 1; MCVER=$c; return 0
+  fi
+  local -a items=()
+  while read -r v; do
+    if [ -z "$first" ]; then first=$v; items+=("$v" "mais recente"); else items+=("$v" ""); fi
+  done <<<"$list"
+  c=$(D --title " Versão do Minecraft " --ok-label "Continuar" --cancel-label "Voltar" --default-item "${MCVER:-$first}" --menu \
+    "\nOs jogadores precisam usar a \Zbmesma versão\Zn no jogo.\n" "$DH" "$DW" 12 "${items[@]}") || return 1
+  MCVER=$c
+}
+mc_details() {
+  local vals; local -a v
+  while :; do
+    vals=$(D --title " Detalhes do servidor " --ok-label "Continuar" --cancel-label "Voltar" --form \
+"
+Tudo isso dá para mudar depois pelo painel.
+" 11 "$DW" 3 \
+      "      Nome no painel:" 1 1 "$SRVNAME" 1 23 40 40 \
+      "     Mensagem (MOTD):" 2 1 "$MC_MOTD" 2 23 48 59 \
+      "  Máximo de jogadores:" 3 1 "$MC_MAXP" 3 23 5 3) || return 1
+    mapfile -t v <<<"$vals"
+    SRVNAME=${v[0]:-}; MC_MOTD=${v[1]:-}; MC_MAXP=${v[2]:-}
+    SRVNAME=${SRVNAME//[\"\\]/}; MC_MOTD=${MC_MOTD//\\/}
+    [ -z "$SRVNAME" ] && { msg "Dê um nome ao servidor."; continue; }
+    if ! [[ $MC_MAXP =~ ^[0-9]+$ ]] || (( MC_MAXP < 1 || MC_MAXP > 200 )); then msg "Máximo de jogadores: um número de 1 a 200."; continue; fi
+    return 0
+  done
+}
+mc_diff() {
+  local c
+  c=$(D --title " Dificuldade " --no-tags --ok-label "Continuar" --cancel-label "Voltar" --default-item "$MC_DIFF" --menu "\nDificuldade do mundo:\n" 0 "$DW" 0 \
+    peaceful "Pacífico: sem monstros" \
+    easy     "Fácil" \
+    normal   "Normal" \
+    hard     "Difícil") || return 1
+  MC_DIFF=$c
+}
+mc_opt() {
+  local extra="" rc
+  [ "$MCTYPE" = fabric ] && extra="$NL   • instala mods de performance (Lithium, FerriteCore, Krypton, C2ME)"
+  D --title " Otimizações " --yes-label "Otimizar" --extra-button --extra-label "Deixar padrão" --no-label "Voltar" \
+    $($OPTIMIZE || echo --default-button extra) --yesno \
+"
+Recomendado para hardware fraco (notebook antigo, CPU dual-core):
+
+   • diminui view/simulation distance (6/4 em vez de 10/10)
+   • destrava CPUs Dell/Haswell presas em ~800 MHz (BD PROCHOT)$extra
+
+Se preferir, instalo o padrão e você ajusta pelo painel.
+" 0 "$DW"
+  rc=$?
+  case $rc in 0) OPTIMIZE=true ;; 3) OPTIMIZE=false ;; *) return 1 ;; esac
+}
+mc_eula() {
+  local rc
+  D --title " EULA do Minecraft " --yes-label "Aceito" --extra-button --extra-label "Não aceito" --no-label "Voltar" --yesno \
+"
+Para rodar um servidor de Minecraft é preciso aceitar o Contrato de
+Licença (EULA) da Mojang:
+
+      \Zbhttps://aka.ms/MinecraftEULA\Zn
+
+Sem aceitar, o servidor é instalado mas fica parado (dá para aceitar
+depois pelo painel).
+" 0 "$DW"
+  rc=$?
+  case $rc in 0) EULA=true ;; 3) EULA=false ;; *) return 1 ;; esac
+}
+scr_minecraft() { bt "Minecraft"; wizard mc_type mc_version mc_details mc_diff mc_opt mc_eula; }
+
+# ---------------------------------------------------------------------------
+# 8) Painel web
+# ---------------------------------------------------------------------------
+scr_panel() {
+  bt "Painel web"
+  local c vals; local -a v
+  while :; do
+    c=$(D --title " Painel web " --no-tags --ok-label "Continuar" --cancel-label "Voltar" --default-item "$($PANEL_SAME && echo mesma || echo outra)" --menu \
+"
+O painel web (porta 8080) é onde você liga/desliga servidores, instala
+mods e plugins, vê o console e faz backups, tudo pelo navegador.
+
+Qual senha usar para entrar no painel?
+" 0 "$DW" 0 \
+      mesma "A mesma senha do usuário $USERNAME" \
+      outra "Definir uma senha diferente") || return 1
+    if [ "$c" = mesma ]; then PANEL_SAME=true; PANELPW=$USERPW; return 0; fi
+    vals=$(D --title " Senha do painel " --ok-label "Continuar" --cancel-label "Voltar" --insecure --mixedform "\n" 10 "$DW" 2 \
+      "     Senha do painel:" 1 1 "" 1 23 40 128 1 \
+      "    Confirme a senha:" 2 1 "" 2 23 40 128 1) || continue
+    mapfile -t v <<<"$vals"
+    if [ ${#v[0]} -lt 6 ]; then msg "A senha precisa ter pelo menos 6 caracteres."; continue; fi
+    if [ "${v[0]}" != "${v[1]:-}" ]; then msg "As senhas não batem."; continue; fi
+    PANEL_SAME=false; PANELPW=${v[0]}; return 0
+  done
+}
+
+# ---------------------------------------------------------------------------
+# 9) Resumo + confirmação destrutiva
+# ---------------------------------------------------------------------------
+scr_summary() {
+  bt "Resumo"
+  local net ssh diffpt
+  if [ -n "$STATIC_IF" ]; then net="IP fixo $STATIC_ADDR em $STATIC_IF"; else net="automática (DHCP)"; fi
+  [ -n "$WIFI_SSID" ] && net="$net, Wi-Fi \"$WIFI_SSID\""
+  ssh="$(ssh_count) chave(s)"; if $SSH_PWAUTH; then ssh="$ssh, senha permitida"; else ssh="$ssh, senha bloqueada"; fi
+  case "$MC_DIFF" in peaceful) diffpt="pacífico";; easy) diffpt="fácil";; hard) diffpt="difícil";; *) diffpt="normal";; esac
+  D --title " Resumo da instalação " --yes-label "Instalar" --no-label "Voltar" --yesno \
+"
+  Disco:          \Zb$DISK\Zn ($(lsblk -dno SIZE "$DISK" 2>/dev/null | tr -d ' ')), será apagado inteiro
+  Teclado:        $KEYMAP
+  Rede:           $net
+  Máquina:        $SRV_HOST   (usuário: $USERNAME)
+  SSH:            $ssh
+  Servidor:       $SRVNAME: $MCTYPE $MCVER, até $MC_MAXP jogadores, $diffpt
+  Memória Java:   $(heap_mb) MB (calculado pela RAM de $(human_ram))
+  Otimizações:    $($OPTIMIZE && echo sim || echo não)
+  EULA:           $($EULA && echo aceita || echo "não aceita (servidor fica parado)")
+  Painel web:     porta 8080, $($PANEL_SAME && echo "mesma senha do usuário" || echo "senha própria")
+
+Revise e escolha \ZbInstalar\Zn. Ainda dá para voltar e mudar qualquer coisa.
+" 0 "$DW" || return 1
+  D --title " Confirmar ação destrutiva " --defaultno --yes-label "Continuar" --no-label "Voltar" --yesno \
+"
+Se você continuar, o disco \Zb$DISK\Zn será \Z1\Zbapagado por completo\Zn e o
+craftbox será instalado nele.
+
+\Z1Não tem como desfazer.\Zn Tudo que estiver nesse disco será perdido.
+
+Tem certeza?
+" 13 "$DW" || return 1
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# instalação (roda em segundo plano; progresso em $STATE, saída em $LOG)
+# ---------------------------------------------------------------------------
+PHASES=("Particionando o disco" "Formatando" "Instalando o sistema base" "Baixando o Minecraft" "Configurando o sistema" "Instalando o gerenciador de boot" "Finalizando")
+PH_START=(0 3 5 70 80 90 96)
+PH_END=(3 5 70 80 90 96 100)
+phase() { echo "$1" > "$STATE"; echo; echo "==> [$(( $1 + 1 ))/${#PHASES[@]}] ${PHASES[$1]}"; }
+fail() { echo "ERRO: $*"; echo "FAIL:$*" > "$STATE"; exit 1; }
+info() { echo "  - $*"; }
+
+do_install_dry() {
+  local i k
+  for i in "${!PHASES[@]}"; do
+    phase "$i"
+    if [ "$i" -eq 2 ]; then for k in $(seq 1 40); do echo "(${k}/40) installing pacote-$k..."; sleep 0.1; done
+    else for k in 1 2 3; do info "simulando passo $k"; sleep 0.4; done; fi
+    [ "$i" -eq 3 ] && [ -n "${CB_DRY_FAIL:-}" ] && fail "falha simulada ($CB_DRY_FAIL)"
+  done
+  echo DONE > "$STATE"
+}
+
+do_install() {
+  local SDIR=/srv/minecraft SRVID MCDIR HEAP
+  HEAP=$(heap_mb)
+  timedatectl set-ntp true 2>/dev/null || true
+  part_names
+
+  phase 0
+  umount -R /mnt 2>/dev/null || true
+  swapoff -a 2>/dev/null || true
+  wipefs -af "$DISK" || fail "não consegui limpar $DISK"
+  sgdisk -Z "$DISK" >/dev/null 2>&1
+  sgdisk -n1:0:+512M -t1:ef00 -c1:ESP "$DISK" || fail "sgdisk (ESP) falhou"
+  sgdisk -n2:0:0 -t2:8300 -c2:root "$DISK" || fail "sgdisk (root) falhou"
+  partprobe "$DISK"; udevadm settle; sleep 2
+  info "ESP=$P1  root=$P2"
+
+  phase 1
+  mkfs.fat -F32 -n ESP "$P1" || fail "mkfs.fat falhou"
+  mkfs.ext4 -F -L root "$P2" || fail "mkfs.ext4 falhou"
+  mount "$P2" /mnt || fail "não consegui montar $P2"
+  mkdir -p /mnt/boot && mount "$P1" /mnt/boot || fail "não consegui montar $P1"
+
+  phase 2
+  pacstrap -K /mnt \
+    base linux linux-firmware mkinitcpio intel-ucode \
+    networkmanager openssh sudo \
+    jre-openjdk-headless \
+    git tmux nano vim htop jq curl wget which nodejs \
+    msr-tools || fail "pacstrap falhou (rede ou espelho do Arch fora do ar?)"
+  genfstab -U /mnt >> /mnt/etc/fstab
+  info "criando swap de 2 GB"
+  if dd if=/dev/zero of=/mnt/swapfile bs=1M count=2048 status=none && chmod 600 /mnt/swapfile && mkswap /mnt/swapfile >/dev/null; then
+    echo '/swapfile none swap defaults 0 0' >> /mnt/etc/fstab
+  else info "aviso: swap não criado"; rm -f /mnt/swapfile; fi
+
+  phase 3
+  SRVID=$(printf '%s' "$SRVNAME" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//;s/-*$//')
+  [ -z "$SRVID" ] && SRVID=principal
+  MCDIR=/mnt$SDIR/$SRVID
+  mkdir -p "$MCDIR/mods" "$MCDIR/plugins" "$MCDIR/backups"
+  echo "$MCTYPE" > "$MCDIR/.craftbox-loader"
+  if [ "$MCTYPE" = paper ]; then
+    local dl url build
+    dl=$(curl -fsSL -A "$UA" "https://fill.papermc.io/v3/projects/paper/versions/$MCVER/builds/latest") || fail "não achei build do Paper para $MCVER"
+    build=$(jq -r '.id' <<<"$dl"); url=$(jq -r '.downloads."server:default".url' <<<"$dl")
+    [ -n "$url" ] && [ "$url" != null ] || fail "não achei build do Paper para $MCVER"
+    curl -fL --retry 3 -sS -A "$UA" -o "$MCDIR/server.jar" "$url" || fail "falha ao baixar o Paper"
+    info "Paper $MCVER build $build"
+  else
+    local loader inst slug url
+    loader=$(curl -fsSL https://meta.fabricmc.net/v2/versions/loader | jq -r '[.[]|select(.stable==true)][0].version')
+    inst=$(curl -fsSL https://meta.fabricmc.net/v2/versions/installer | jq -r '[.[]|select(.stable==true)][0].version')
+    curl -fL --retry 3 -sS -o "$MCDIR/server.jar" "https://meta.fabricmc.net/v2/versions/loader/$MCVER/$loader/$inst/server/jar" \
+      || fail "falha ao baixar o Fabric $MCVER"
+    info "Fabric $MCVER (loader $loader)"
+    if $OPTIMIZE; then
+      for slug in fabric-api lithium ferrite-core krypton c2me-fabric; do
+        url=$(curl -fsSL "https://api.modrinth.com/v2/project/$slug/version?loaders=%5B%22fabric%22%5D&game_versions=%5B%22$MCVER%22%5D" \
+              | jq -r '.[0].files[]? | select(.primary==true) | .url' 2>/dev/null | head -1)
+        if [ -n "${url:-}" ] && [ "$url" != null ]; then curl -fL --retry 2 -sS -o "$MCDIR/mods/$slug.jar" "$url" && info "mod: $slug"
+        else info "sem build de $slug para $MCVER (pulei)"; fi
+      done
+    fi
+  fi
+  jq -n --arg name "$SRVNAME" --arg loader "$MCTYPE" --arg v "$MCVER" \
+    '{name:$name, loader:$loader, mcVersion:$v, port:25565, createdAt:0}' > "$MCDIR/.craftbox-instance.json"
+  printf '# gerado pelo instalador — https://aka.ms/MinecraftEULA\neula=%s\n' "$EULA" > "$MCDIR/eula.txt"
+  local vdist=10 sdist=10; $OPTIMIZE && { vdist=6; sdist=4; }
+  cat > "$MCDIR/server.properties" <<EOF
 # view/simulation distance conforme o modo escolhido na instalacao. Edite pelo painel.
 motd=$MC_MOTD
 max-players=$MC_MAXP
 difficulty=$MC_DIFF
 online-mode=true
-view-distance=$VDIST
-simulation-distance=$SDIST
+view-distance=$vdist
+simulation-distance=$sdist
 network-compression-threshold=256
 enable-command-block=true
 spawn-protection=0
 enable-rcon=true
 rcon.port=25575
-rcon.password=$(head -c8 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c12)
+rcon.password=$(head -c16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c12)
 server-port=25565
 EOF
-
-# script de start com flags do Aikar
-cat > "$MCDIR/start.sh" <<EOF
+  cat > "$MCDIR/start.sh" <<EOF
 #!/usr/bin/env bash
 cd "\$(dirname "\$0")"
 exec /usr/bin/java \\
@@ -271,10 +765,7 @@ exec /usr/bin/java \\
   -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true \\
   -jar server.jar --nogui
 EOF
-chmod +x "$MCDIR/start.sh"
-
-# script de backup do mundo
-cat > "$MCDIR/backup.sh" <<'EOF'
+  cat > "$MCDIR/backup.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -284,46 +775,38 @@ tar czf "backups/world-$ts.tar.gz" world world_nether world_the_end 2>/dev/null 
 # mantem os 7 backups mais recentes
 ls -1t backups/world-*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm -f
 EOF
-chmod +x "$MCDIR/backup.sh"
+  chmod +x "$MCDIR/start.sh" "$MCDIR/backup.sh"
 
-# ---------------------------------------------------------------------------
-# 7) Configuracao dentro do sistema (chroot)
-# ---------------------------------------------------------------------------
-say "Configurando sistema instalado"
+  phase 4
+  # rede: Wi-Fi e/ou IP fixo viram conexões do NetworkManager
+  local nmdir=/mnt/etc/NetworkManager/system-connections ipv4="method=auto" d dnsl=""
+  mkdir -p "$nmdir"
+  if [ -n "$STATIC_IF" ]; then
+    for d in ${STATIC_DNS//,/ }; do dnsl+="$d;"; done
+    ipv4="method=manual${NL}address1=$STATIC_ADDR,$STATIC_GW${NL}dns=$dnsl"
+  fi
+  if [ -n "$WIFI_SSID" ]; then
+    { printf '[connection]\nid=craftbox-wifi\ntype=wifi\nautoconnect=true\n[wifi]\nssid=%s\nmode=infrastructure\n' "$WIFI_SSID"
+      $WIFI_HIDDEN && printf 'hidden=true\n'
+      [ -n "$WIFI_PASS" ] && printf '[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n' "$WIFI_PASS"
+      if [ "$STATIC_IF" = "$WIFI_IF" ]; then printf '[ipv4]\n%s\n' "$ipv4"; else printf '[ipv4]\nmethod=auto\n'; fi
+      printf '[ipv6]\nmethod=auto\n'
+    } > "$nmdir/craftbox-wifi.nmconnection"
+    info "Wi-Fi \"$WIFI_SSID\" salvo"
+  fi
+  if [ -n "$STATIC_IF" ] && [ "$STATIC_IF" != "$WIFI_IF" ]; then
+    printf '[connection]\nid=craftbox-cabo\ntype=ethernet\ninterface-name=%s\nautoconnect=true\n[ipv4]\n%s\n[ipv6]\nmethod=auto\n' "$STATIC_IF" "$ipv4" \
+      > "$nmdir/craftbox-cabo.nmconnection"
+    info "IP fixo $STATIC_ADDR em $STATIC_IF"
+  fi
+  chmod 600 "$nmdir"/*.nmconnection 2>/dev/null
 
-# rede persistente: se usou Wi-Fi, cria conexao do NetworkManager
-if [ -n "$WIFI_SSID" ]; then
-  mkdir -p /mnt/etc/NetworkManager/system-connections
-  cat > /mnt/etc/NetworkManager/system-connections/mc-wifi.nmconnection <<EOF
-[connection]
-id=mc-wifi
-type=wifi
-autoconnect=true
-[wifi]
-ssid=$WIFI_SSID
-mode=infrastructure
-[wifi-security]
-key-mgmt=wpa-psk
-psk=$WIFI_PASS
-[ipv4]
-method=auto
-[ipv6]
-method=auto
-EOF
-  chmod 600 /mnt/etc/NetworkManager/system-connections/mc-wifi.nmconnection
-fi
+  # tampa fechada não desliga
+  mkdir -p /mnt/etc/systemd/logind.conf.d
+  printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' > /mnt/etc/systemd/logind.conf.d/lid.conf
 
-# tampa fechada nao desliga
-mkdir -p /mnt/etc/systemd/logind.conf.d
-cat > /mnt/etc/systemd/logind.conf.d/lid.conf <<EOF
-[Login]
-HandleLidSwitch=ignore
-HandleLidSwitchExternalPower=ignore
-HandleLidSwitchDocked=ignore
-EOF
-
-# servico do minecraft — TEMPLATE (uma unidade por instancia: minecraft@<id>)
-cat > /mnt/etc/systemd/system/minecraft@.service <<'EOF'
+  # serviço do minecraft — TEMPLATE (uma unidade por instância: minecraft@<id>)
+  cat > /mnt/etc/systemd/system/minecraft@.service <<'EOF'
 [Unit]
 Description=Servidor Minecraft (%i)
 After=network-online.target
@@ -344,9 +827,7 @@ SuccessExitStatus=143 SIGTERM
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# backup diario — TEMPLATE por instancia (mc-backup@<id>)
-cat > /mnt/etc/systemd/system/mc-backup@.service <<'EOF'
+  cat > /mnt/etc/systemd/system/mc-backup@.service <<'EOF'
 [Unit]
 Description=Backup do mundo (%i)
 [Service]
@@ -354,7 +835,7 @@ Type=oneshot
 User=minecraft
 ExecStart=/srv/minecraft/%i/backup.sh
 EOF
-cat > /mnt/etc/systemd/system/mc-backup@.timer <<'EOF'
+  cat > /mnt/etc/systemd/system/mc-backup@.timer <<'EOF'
 [Unit]
 Description=Backup diario do mundo (%i)
 [Timer]
@@ -364,10 +845,9 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-# mensagem de boas-vindas por SSH
-cat > /mnt/etc/motd <<EOF
+  cat > /mnt/etc/motd <<EOF
 
-  craftbox — $HOSTNAME   (servidor inicial: $SRVNAME · $MCTYPE)
+  craftbox — $SRV_HOST   (servidor inicial: $SRVNAME · $MCTYPE)
   ------------------------------------------------------------
   painel web:  http://<ip-desta-maquina>:8080
   status:      systemctl status minecraft@$SRVID
@@ -377,43 +857,44 @@ cat > /mnt/etc/motd <<EOF
   painel:      /opt/craftbox-panel
 
 EOF
-
-# tela de boas-vindas no CONSOLE (acima do "login:") — o agetty troca \4 pelo IP real
-cat > /mnt/etc/issue <<ISSUE
+  # tela de boas-vindas no console (acima do "login:") — o agetty troca \4 pelo IP real
+  cat > /mnt/etc/issue <<ISSUE
 
   ============================================================
-   craftbox  -  $HOSTNAME
+   craftbox  -  $SRV_HOST
   ============================================================
 
    >> Painel web:   http://\\4:8080
    >> Entrar SSH:   ssh $USERNAME@\\4
 
-   Servidor "$SRVNAME" ($MCTYPE) rodando na porta 25565.
+   Servidor "$SRVNAME" ($MCTYPE) na porta 25565.
    Abra o painel no navegador pra gerenciar tudo.
 
 ISSUE
 
-# painel web: copia pro sistema instalado (vem embarcado na ISO em /opt/craftbox-panel)
-if [ -d /opt/craftbox-panel ]; then
-  mkdir -p /mnt/opt/craftbox-panel
-  cp -rT /opt/craftbox-panel /mnt/opt/craftbox-panel
-  rm -f /mnt/opt/craftbox-panel/config.json 2>/dev/null || true
-  ok "painel copiado pra /opt/craftbox-panel"
-else
-  warn "painel nao encontrado no live (/opt/craftbox-panel); a ISO foi montada sem ele?"
-fi
+  # SSH: login por senha conforme escolhido; root nunca
+  mkdir -p /mnt/etc/ssh/sshd_config.d
+  { if $SSH_PWAUTH; then echo 'PasswordAuthentication yes'; else echo 'PasswordAuthentication no'; fi
+    echo 'PermitRootLogin no'; } > /mnt/etc/ssh/sshd_config.d/10-craftbox.conf
 
-# fix do BD PROCHOT (destrava CPU presa em ~800 MHz em Dell/Haswell velhos)
-# copia o script + servico pro sistema instalado; so e HABILITADO se OPTIMIZE=true
-if [ -f /usr/local/bin/craftbox-bdprochot ]; then
-  install -Dm755 /usr/local/bin/craftbox-bdprochot /mnt/usr/local/bin/craftbox-bdprochot
-  install -Dm644 /etc/systemd/system/craftbox-bdprochot.service /mnt/etc/systemd/system/craftbox-bdprochot.service
-  install -Dm644 /etc/modules-load.d/msr.conf /mnt/etc/modules-load.d/msr.conf 2>/dev/null || true
-  ok "fix de BD PROCHOT copiado (habilita no boot se otimizado)"
-fi
+  # painel web: copia pro sistema instalado (vem embarcado na ISO em /opt/craftbox-panel)
+  if [ -d /opt/craftbox-panel ]; then
+    mkdir -p /mnt/opt/craftbox-panel
+    cp -rT /opt/craftbox-panel /mnt/opt/craftbox-panel
+    rm -f /mnt/opt/craftbox-panel/config.json
+    info "painel copiado para /opt/craftbox-panel"
+  else
+    info "aviso: painel não encontrado no live (/opt/craftbox-panel)"
+  fi
+  # fix do BD PROCHOT (CPU presa em ~800 MHz em Dell/Haswell); só é habilitado se otimizado
+  if [ -f /usr/local/bin/craftbox-bdprochot ]; then
+    install -Dm755 /usr/local/bin/craftbox-bdprochot /mnt/usr/local/bin/craftbox-bdprochot
+    install -Dm644 /etc/systemd/system/craftbox-bdprochot.service /mnt/etc/systemd/system/craftbox-bdprochot.service
+    install -Dm644 /etc/modules-load.d/msr.conf /mnt/etc/modules-load.d/msr.conf 2>/dev/null || true
+  fi
 
-# script de configuracao que roda dentro do chroot
-cat > /mnt/root/chroot-setup.sh <<CHROOT
+  # configuração dentro do chroot (só valores já validados; senhas vão por stdin, fora do script)
+  cat > /mnt/root/chroot-setup.sh <<CHROOT
 #!/usr/bin/env bash
 set -euo pipefail
 ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
@@ -421,57 +902,22 @@ hwclock --systohc || true
 sed -i 's/^#\(pt_BR.UTF-8\)/\1/; s/^#\(en_US.UTF-8\)/\1/' /etc/locale.gen
 locale-gen
 echo 'LANG=pt_BR.UTF-8' > /etc/locale.conf
-echo 'KEYMAP=br-abnt2' > /etc/vconsole.conf
-echo '$HOSTNAME' > /etc/hostname
-cat > /etc/hosts <<HOSTS
-127.0.0.1   localhost
-::1         localhost
-127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
-HOSTS
+printf 'KEYMAP=%s\nFONT=eurlatgr\n' '$KEYMAP' > /etc/vconsole.conf
+echo '$SRV_HOST' > /etc/hostname
+printf '127.0.0.1   localhost\n::1         localhost\n127.0.1.1   $SRV_HOST.localdomain $SRV_HOST\n' > /etc/hosts
 
-# usuario + sudo
-useradd -m -G wheel -s /bin/bash '$USERNAME'
-echo '$USERNAME:$USERPW' | chpasswd
+useradd -m -G wheel -s /bin/bash -c "\$(cat /root/.cb-fullname)" '$USERNAME'
+rm -f /root/.cb-fullname
 passwd -l root
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
 chmod 440 /etc/sudoers.d/wheel
 
-# chave SSH opcional
-if [ -n '$SSHKEY' ]; then
-  install -d -m700 -o '$USERNAME' -g '$USERNAME' /home/$USERNAME/.ssh
-  echo '$SSHKEY' > /home/$USERNAME/.ssh/authorized_keys
-  chmod 600 /home/$USERNAME/.ssh/authorized_keys
-  chown $USERNAME:$USERNAME /home/$USERNAME/.ssh/authorized_keys
-fi
-
-# usuario de servico do minecraft (dono das instancias em /srv/minecraft)
 useradd -r -m -d /srv/minecraft -s /usr/bin/nologin minecraft || true
 chown -R minecraft:minecraft /srv/minecraft
 find /srv/minecraft -name '*.sh' -exec chmod +x {} +
-# lingering: permite que o painel controle integracoes via 'systemctl --user' (playit/cloudflared)
 mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/minecraft
 
-# painel web (craftbox-panel): config + servico
 if [ -d /opt/craftbox-panel ]; then
-  PSECRET=\$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
-  PHASH=\$(node /opt/craftbox-panel/server.js --hash '$PANELPW' | tail -n +2)
-  cat > /opt/craftbox-panel/config.json <<PCFG
-{
-  "port": 8080,
-  "host": "0.0.0.0",
-  "serversDir": "/srv/minecraft",
-  "serviceTemplate": "minecraft@",
-  "activeServer": "$SRVID",
-  "systemctlUser": false,
-  "integrationsDir": "/srv/minecraft/.craftbox-integrations",
-  "auditLog": "/srv/minecraft/.craftbox-audit.log",
-  "rcon": { "host": "127.0.0.1", "port": 25575, "password": "" },
-  "auth": \$PHASH,
-  "sessionSecret": "\$PSECRET"
-}
-PCFG
-  chown -R minecraft:minecraft /opt/craftbox-panel
-  chmod 600 /opt/craftbox-panel/config.json
   cat > /etc/systemd/system/craftbox-panel.service <<PSVC
 [Unit]
 Description=craftbox-panel (painel web)
@@ -487,7 +933,6 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 PSVC
-  # sudoers: painel controla os servicos das instancias sem senha
   cat > /etc/sudoers.d/craftbox-panel <<SUDO
 minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft@*, /usr/bin/systemctl stop minecraft@*, /usr/bin/systemctl restart minecraft@*
 minecraft ALL=(root) NOPASSWD: /usr/bin/tailscale up *, /usr/bin/tailscale down
@@ -496,61 +941,163 @@ SUDO
   chmod 440 /etc/sudoers.d/craftbox-panel
 fi
 
-# bootloader systemd-boot (UEFI)
-bootctl install
-ROOT_UUID=\$(blkid -s PARTUUID -o value $P2)
-cat > /boot/loader/loader.conf <<LOADER
-default arch.conf
-timeout 1
-console-mode max
-editor no
-LOADER
-cat > /boot/loader/entries/arch.conf <<ENTRY
-title   Minecraft Server (Arch)
-linux   /vmlinuz-linux
-initrd  /intel-ucode.img
-initrd  /initramfs-linux.img
-options root=PARTUUID=\$ROOT_UUID rw quiet
-ENTRY
-
-# habilita servicos (a instancia principal sobe no boot; o painel tambem)
 systemctl enable NetworkManager sshd systemd-timesyncd
 systemctl enable minecraft@$SRVID
 systemctl enable mc-backup@$SRVID.timer
 [ -d /opt/craftbox-panel ] && systemctl enable craftbox-panel || true
-# destrava CPU (BD PROCHOT) so no modo otimizado
 if [ "$OPTIMIZE" = "true" ] && [ -f /etc/systemd/system/craftbox-bdprochot.service ]; then
   systemctl enable craftbox-bdprochot || true
 fi
-
-# regenera initramfs por garantia
-mkinitcpio -P
 CHROOT
-chmod +x /mnt/root/chroot-setup.sh
+  chmod +x /mnt/root/chroot-setup.sh
+  printf '%s' "$FULLNAME" > /mnt/root/.cb-fullname
+  arch-chroot /mnt /root/chroot-setup.sh || fail "configuração no chroot falhou"
+  rm -f /mnt/root/chroot-setup.sh
+  printf '%s:%s\n' "$USERNAME" "$USERPW" | arch-chroot /mnt chpasswd || fail "não consegui definir a senha do usuário"
+  if [ -n "$SSH_KEYS" ]; then
+    install -d -m700 "/mnt/home/$USERNAME/.ssh"
+    printf '%s\n' "$SSH_KEYS" > "/mnt/home/$USERNAME/.ssh/authorized_keys"
+    chmod 600 "/mnt/home/$USERNAME/.ssh/authorized_keys"
+    arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
+    info "$(ssh_count) chave(s) SSH instalada(s)"
+  fi
+  # painel: config com hash da senha (a senha vai como argumento, nunca pro log)
+  if [ -d /mnt/opt/craftbox-panel ]; then
+    local phash psecret
+    phash=$(arch-chroot /mnt node /opt/craftbox-panel/server.js --hash "$PANELPW" | tail -n +2) || fail "não consegui gerar o hash da senha do painel"
+    psecret=$(head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    cat > /mnt/opt/craftbox-panel/config.json <<PCFG
+{
+  "port": 8080,
+  "host": "0.0.0.0",
+  "serversDir": "/srv/minecraft",
+  "serviceTemplate": "minecraft@",
+  "activeServer": "$SRVID",
+  "systemctlUser": false,
+  "integrationsDir": "/srv/minecraft/.craftbox-integrations",
+  "auditLog": "/srv/minecraft/.craftbox-audit.log",
+  "rcon": { "host": "127.0.0.1", "port": 25575, "password": "" },
+  "auth": $phash,
+  "sessionSecret": "$psecret"
+}
+PCFG
+    arch-chroot /mnt chown -R minecraft:minecraft /opt/craftbox-panel
+    chmod 600 /mnt/opt/craftbox-panel/config.json
+  fi
 
-arch-chroot /mnt /root/chroot-setup.sh || die "Configuracao no chroot falhou."
-rm -f /mnt/root/chroot-setup.sh
+  phase 5
+  local root_uuid
+  arch-chroot /mnt bootctl install || fail "bootctl install falhou"
+  root_uuid=$(blkid -s PARTUUID -o value "$P2")
+  printf 'default craftbox.conf\ntimeout 1\nconsole-mode max\neditor no\n' > /mnt/boot/loader/loader.conf
+  printf 'title   craftbox\nlinux   /vmlinuz-linux\ninitrd  /intel-ucode.img\ninitrd  /initramfs-linux.img\noptions root=PARTUUID=%s rw quiet\n' "$root_uuid" \
+    > /mnt/boot/loader/entries/craftbox.conf
+  arch-chroot /mnt mkinitcpio -P || fail "mkinitcpio falhou"
+
+  phase 6
+  mkdir -p /mnt/var/log
+  cp "$LOG" /mnt/var/log/craftbox-install.log 2>/dev/null
+  sync
+  umount -R /mnt || true
+  echo DONE > "$STATE"
+}
+
+progress_ui() {
+  BT="craftbox $CB_VERSION  ·  Instalador$($DRYRUN && echo '  ·  SIMULAÇÃO')      instalando..."
+  local pid=$1 st i pct cur lines txt spin='|/-\' k=0 done_n tot
+  {
+    while :; do
+      st=$(cat "$STATE" 2>/dev/null)
+      [[ "$st" == DONE || "$st" == FAIL* ]] && break
+      cur=${st:-0}; [[ $cur =~ ^[0-9]+$ ]] || cur=0
+      pct=${PH_START[cur]}
+      if [ "$cur" -eq 2 ]; then
+        # pacstrap: "(12/180) installing foo" → progresso dentro da fase
+        done_n=""; tot=""
+        read -r done_n tot < <(grep -aoE '^\( *[0-9]+/[0-9]+\) installing' "$LOG" | tail -1 | tr -d '() ' | sed 's/installing//; s|/| |')
+        if [ -n "${tot:-}" ] && (( tot > 0 )); then pct=$(( PH_START[2] + (PH_END[2] - PH_START[2]) * done_n / tot )); fi
+      fi
+      txt=""
+      for i in "${!PHASES[@]}"; do
+        if (( i < cur )); then txt+="   [\Z2ok\Zn] ${PHASES[i]}$NL"
+        elif (( i == cur )); then txt+="   [\Z3${spin:k%4:1}\Zn ] \Zb${PHASES[i]}\Zn$NL"
+        else txt+="   [  ] ${PHASES[i]}$NL"; fi
+      done
+      lines=$(tail -n 5 "$LOG" 2>/dev/null | tr -d '\r\\' | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | cut -c1-$(( DW - 8 )) | sed 's/^/   /')
+      printf 'XXX\n%d\n\n%s\n   ─── últimas linhas do log ───\n%s\nXXX\n' "$pct" "$txt" "$lines"
+      k=$((k + 1)); sleep 1
+    done
+  } | D --title " Instalando o craftbox " --gauge "" "$DH" "$DW" 0
+  wait "$pid" 2>/dev/null
+}
+
+scr_done() {
+  local ip c
+  ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+  [ -n "$STATIC_ADDR" ] && ip=${STATIC_ADDR%/*}
+  BT="craftbox $CB_VERSION  ·  Instalador      concluído"
+  while :; do
+    c=$(D --title " Instalação concluída! " --no-tags --no-cancel --ok-label "Selecionar" --menu \
+"
+O craftbox foi instalado. Ao reiniciar, o servidor \Zb$SRVNAME\Zn sobe
+sozinho na porta 25565.
+
+   Painel web:   \Zbhttp://${ip:-<ip-da-máquina>}:8080\Zn
+   SSH:          ssh $USERNAME@${ip:-<ip-da-máquina>}
+
+\Z3Tire o pendrive\Zn quando a tela apagar. O endereço do painel também
+aparece na tela da máquina, acima do login.
+" 0 "$DW" 0 \
+      reiniciar "Reiniciar agora" \
+      log       "Ver o log da instalação" \
+      terminal  "Sair para o terminal") || continue
+    case "$c" in
+      reiniciar) $DRYRUN && exit 0; reboot ;;
+      log) D --title " Log da instalação " --exit-label "Voltar" --textbox "$LOG" "$DH" "$DW" ;;
+      terminal) exit 0 ;;
+    esac
+  done
+}
+scr_failed() {
+  local why=${1#FAIL:} c
+  BT="craftbox $CB_VERSION  ·  Instalador      erro"
+  while :; do
+    c=$(D --title " A instalação falhou " --no-tags --no-cancel --ok-label "Selecionar" --menu \
+"
+\Z1\Zb$why\Zn
+
+Últimas linhas do log:
+$(tail -n 7 "$LOG" | tr -d '\\' | cut -c1-$(( DW - 8 )) | sed 's/^/   /')
+" 0 "$DW" 0 \
+      log       "Ver o log completo" \
+      denovo    "Voltar ao resumo e tentar de novo" \
+      terminal  "Sair para o terminal" \
+      reiniciar "Reiniciar") || continue
+    case "$c" in
+      log) D --title " Log da instalação " --exit-label "Voltar" --textbox "$LOG" "$DH" "$DW" ;;
+      denovo) return 0 ;;
+      terminal) EXIT_MSG="Log da instalação: $LOG   (para tentar de novo: mc-install)"; exit 1 ;;
+      reiniciar) $DRYRUN && exit 1; reboot ;;
+    esac
+  done
+}
 
 # ---------------------------------------------------------------------------
-# 8) Fim
+# main
 # ---------------------------------------------------------------------------
-say "Finalizando"
-sync
-umount -R /mnt || true
-echo
-ok "INSTALACAO CONCLUIDA!"
-echo
-IPADDR=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
-echo "  Ao reiniciar, o servidor '$SRVNAME' sobe sozinho na porta 25565."
-echo
-echo "  >> PAINEL WEB:  http://${IPADDR:-<ip-do-servidor>}:8080   (use a senha do painel)"
-echo "  >> SSH:         ssh $USERNAME@${IPADDR:-<ip-do-servidor>}"
-echo
-echo "  (esse endereço também aparece na tela da máquina, acima do login)"
-echo
-if yesno "Reiniciar agora? (tire o pendrive quando apagar a tela)" s; then
-  reboot
-else
-  echo "Ok, digite 'reboot' quando quiser."
-  exec bash
-fi
+[ -t 0 ] && [ -t 1 ] || { echo "mc-install precisa de um terminal." >&2; exit 1; }
+command -v "$DIALOG" >/dev/null 2>&1 || { echo "mc-install: '$DIALOG' não encontrado." >&2; exit 1; }
+if ! $DRYRUN && [ "$(id -u)" -ne 0 ]; then echo "mc-install precisa rodar como root (ou use --dry-run)." >&2; exit 1; fi
+setup_theme; fit_screen
+
+SCREENS=(scr_welcome scr_keyboard scr_network scr_storage scr_profile scr_ssh scr_minecraft scr_panel scr_summary)
+top_wizard "${SCREENS[@]}"
+while :; do
+  : > "$LOG"; echo 0 > "$STATE"
+  if $DRYRUN; then do_install_dry >> "$LOG" 2>&1 & else do_install >> "$LOG" 2>&1 & fi
+  progress_ui $!
+  st=$(cat "$STATE")
+  [ "$st" = DONE ] && scr_done
+  scr_failed "$st"
+  WIZ_START=$(( ${#SCREENS[@]} - 1 )) top_wizard "${SCREENS[@]}"
+done

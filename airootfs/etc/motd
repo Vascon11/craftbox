@@ -1,4 +1,5 @@
 
-  ISO de instalacao — Servidor Minecraft (Arch appliance)
-  Se o instalador nao abriu sozinho, rode:  mc-install
+  craftbox — ISO de instalação
+  Se o instalador não abriu sozinho, rode:  mc-install
+  (para só ver as telas sem instalar nada:  mc-install --dry-run)
 

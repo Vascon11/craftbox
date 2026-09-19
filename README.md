@@ -100,7 +100,7 @@ Ou use uma GUI: Fedora Media Writer, balenaEtcher, GNOME Disks. Também funciona
 
 ### 3. Instalar
 
-Dê boot pelo pendrive → o instalador abre sozinho → responda as perguntas (inclusive a **senha do painel**) → ele instala e reinicia já servindo Minecraft na porta **25565**, com o **painel em `http://<ip>:8080`**.
+Dê boot pelo pendrive → o instalador abre sozinho (assistente em tela cheia, no estilo do Ubuntu Server: teclado, rede/Wi-Fi/IP fixo, disco, perfil, chaves SSH do GitHub, Minecraft e painel) → confirme no resumo → ele instala e reinicia já servindo Minecraft na porta **25565**, com o **painel em `http://<ip>:8080`**.
 
 ### 4. Administrar
 
