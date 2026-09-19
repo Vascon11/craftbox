@@ -200,8 +200,19 @@
             <h3>Loja de modpacks</h3>
             <span class="muted small" id="mpInfo">—</span>
           </div>
-          <p class="muted small" style="margin-top:.6rem">Busca no <b>Modrinth</b> e já cria o servidor com todos os mods do pack instalados de uma vez. Cada jogador precisa instalar o <b>mesmo pack</b> no cliente (Prism Launcher / Modrinth App); o painel mostra o link pra compartilhar depois.</p>
+          <p class="muted small" style="margin-top:.6rem">Busca no <b>Modrinth</b> ou no <b>CurseForge</b> e já cria o servidor com todos os mods do pack instalados de uma vez. Cada jogador precisa instalar o <b>mesmo pack</b> no cliente (Prism Launcher / Modrinth App); o painel mostra o link pra compartilhar depois.</p>
+          <div id="cfKeyBox" class="card" style="margin-top:.8rem" hidden>
+            <p class="small" style="margin:0">O CurseForge exige uma <b>chave de API</b> (grátis): entre em <a href="https://console.curseforge.com/" target="_blank" rel="noopener">console.curseforge.com</a>, crie uma conta e copie a chave em <i>API keys</i>.</p>
+            <form id="cfKeyForm" class="content-toolbar" style="margin-top:.6rem">
+              <input type="password" id="cfKeyInput" placeholder="cole a chave da API do CurseForge" autocomplete="off">
+              <button type="submit" class="ok">Salvar chave</button>
+            </form>
+          </div>
           <form id="mpSearchForm" class="content-toolbar">
+            <select id="mpSource" title="Fonte">
+              <option value="modrinth">Modrinth</option>
+              <option value="curseforge">CurseForge</option>
+            </select>
             <input type="text" id="mpSearch" placeholder="buscar modpack (ex: cobblemon, all the mods, better mc)">
             <select id="mpLoader" title="Loader">
               <option value="">Todos os loaders</option>
@@ -424,6 +435,8 @@
         <select id="srvLoader">
           <option value="paper">Paper (plugins, leve)</option>
           <option value="fabric">Fabric (mods)</option>
+          <option value="forge">Forge (mods)</option>
+          <option value="neoforge">NeoForge (mods)</option>
           <option value="pumpkin">Pumpkin (Rust · experimental)</option>
         </select>
         <input type="text" id="srvVersion" placeholder="Versão (opcional, ex: 1.21.1)">

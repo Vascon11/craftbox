@@ -110,6 +110,7 @@ async function renderServerManager() {
         <div class="inst-title">${esc(s.name)} ${s.active === 'active' ? '<span class="tag">no ar</span>' : ''} ${s.selected ? '<span class="tag">selecionado</span>' : ''}</div>
         <div class="muted small">${esc(s.loader)}${s.mcVersion ? ' ' + esc(s.mcVersion) : ''} · porta ${s.port || '?'} · id <code>${esc(s.id)}</code></div>
         ${mp ? `<div class="muted small" style="margin-top:.25rem">📦 modpack: <a href="${esc(mp.url)}" target="_blank" rel="noopener">${esc(mp.name)}</a> v${esc(mp.version)} — <b>jogadores instalam este pack no cliente</b> <button class="ghost sm btn-copy" data-url="${esc(mp.url)}">copiar link</button></div>` : ''}
+        ${(s.manualMods || []).length ? `<details class="small" style="margin-top:.35rem"><summary class="err">⚠ ${s.manualMods.length} mod(s) bloqueados pelo autor pra download automático — baixe e coloque na pasta indicada</summary><ul style="margin:.3rem 0 0 1rem">${s.manualMods.map(m => `<li><a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.file)}</a> → <code>${esc(m.folder)}/</code></li>`).join('')}</ul></details>` : ''}
       </div>
       <div class="inst-actions">
         <button class="ghost sm btn-clone">Clonar</button>
@@ -773,7 +774,7 @@ $('#srvCreateForm').addEventListener('submit', async (e) => {
   const name = $('#srvName').value.trim(); if (!name) return;
   const loader = $('#srvLoader').value, version = $('#srvVersion').value.trim();
   const btn = $('#srvCreateBtn'); btn.disabled = true; btn.textContent = 'criando…';
-  showLoading('Criando "' + name + '"…', false);
+  showLoading('Criando "' + name + '"…', loader === 'forge' || loader === 'neoforge');
   const r = await api('/api/servers/create', { method: 'POST', body: JSON.stringify({ name, loader, version }) });
   hideLoading();
   btn.disabled = false; btn.textContent = 'Criar servidor';
@@ -797,7 +798,8 @@ function mpCard(r) {
       <button class="ok sm btn-mp-create">Criar servidor</button></div>`;
   el.querySelector('.btn-mp-create').onclick = async (ev) => {
     const btn = ev.currentTarget; // capturar antes do await (depois vira null)
-    const { ok, data } = await api('/api/modpacks/versions?slug=' + encodeURIComponent(r.slug));
+    const { ok, data } = await api(`/api/modpacks/versions?source=${r.source || 'modrinth'}&slug=${encodeURIComponent(r.source === 'curseforge' ? r.id : r.slug)}`);
+    if (!ok) { toast(data.error || 'erro ao listar versões', 'err'); return; }
     const versions = (ok && data.versions) || [];
     if (versions.length <= 1) {
       if (!await confirmDialog(`Criar um servidor a partir de "${r.title}"?\n\nBaixa todos os mods do pack (de segundos a alguns minutos, dependendo do tamanho).`, { okText: 'Criar' })) return;
@@ -866,12 +868,15 @@ function mpPickVersion(r, versions) {
 async function doMpCreate(r, versionId, name, btn) {
   btn.disabled = true; btn.textContent = 'instalando…';
   showLoading('Instalando "' + r.title + '"…', true);
-  const { ok, data } = await api('/api/servers/create-modpack', { method: 'POST', body: JSON.stringify({ slug: r.slug, name, versionId }) });
+  const body = { source: r.source || 'modrinth', slug: r.source === 'curseforge' ? r.id : r.slug, name, versionId };
+  const { ok, data } = await api('/api/servers/create-modpack', { method: 'POST', body: JSON.stringify(body) });
   hideLoading();
   btn.disabled = false; btn.textContent = 'Criar servidor';
   if (!ok) { toast(data.error || 'falha ao criar', 'err'); return; }
   const strip = (data.server.strippedMods || []).length;
-  toast('Modpack instalado: ' + data.server.name + ' — porta ' + data.server.port + (strip ? ` · ${strip} mods client-only desativados` : ''));
+  const manual = (data.server.manualMods || []).length;
+  toast('Modpack instalado: ' + data.server.name + ' — porta ' + data.server.port + (strip ? ` · ${strip} mods client-only desativados` : '')
+    + (manual ? ` · ⚠ ${manual} mod(s) precisam ser baixados à mão (veja em Servidores)` : ''), manual ? 'err' : undefined);
   await loadServers(); renderServerManager();
   const st = $('#tabServers');
   if (st && !st.hidden) st.click();
@@ -894,7 +899,10 @@ async function doMpSearch(offset) {
   const box = $('#mpResults'); box.innerHTML = '<div class="muted small" style="padding:1rem">buscando…</div>';
   ['#mpPager', '#mpPagerTop'].forEach(s => { const x = $(s); if (x) x.innerHTML = ''; });
   const info = $('#mpInfo'); if (info) info.textContent = '—';
-  const { ok, data } = await api(`/api/modpacks/search?q=${encodeURIComponent(q)}&loader=${encodeURIComponent(loader)}&offset=${off}`);
+  const source = $('#mpSource').value;
+  $('#cfKeyBox').hidden = true;
+  const { ok, data } = await api(`/api/modpacks/search?source=${source}&q=${encodeURIComponent(q)}&loader=${encodeURIComponent(loader)}&offset=${off}`);
+  if (!ok && data.needKey) { box.innerHTML = ''; $('#cfKeyBox').hidden = false; if (data.error && data.error.includes('inválida')) toast(data.error, 'err'); return; }
   if (!ok) { box.innerHTML = `<div class="err small" style="padding:1rem">${esc(data.error || 'erro')}</div>`; return; }
   if (!data.results || !data.results.length) { box.innerHTML = '<div class="muted small" style="padding:1rem">nada encontrado</div>'; if (info) info.textContent = '0'; return; }
   if (info) info.textContent = `${data.total || 0} resultado(s)`;
@@ -904,6 +912,15 @@ async function doMpSearch(offset) {
 }
 $('#mpSearchForm').addEventListener('submit', (e) => { e.preventDefault(); doMpSearch(0); });
 $('#mpLoader').addEventListener('change', () => doMpSearch(0));
+$('#mpSource').addEventListener('change', () => doMpSearch(0));
+$('#cfKeyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const key = $('#cfKeyInput').value.trim(); if (!key) return;
+  const { ok, data } = await api('/api/modpacks/curseforge-key', { method: 'POST', body: JSON.stringify({ key }) });
+  if (!ok) { toast(data.error || 'falha ao salvar', 'err'); return; }
+  $('#cfKeyInput').value = ''; toast('Chave do CurseForge salva.');
+  doMpSearch(0);
+});
 
 // ---- integrações / rede (playit / tailscale / cloudflare) ----
 function intgPill(on) { return `<span class="status-pill"><span class="dot ${on ? 'on' : 'idle'}"></span>${on ? 'ativo' : 'parado'}</span>`; }

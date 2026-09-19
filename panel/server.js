@@ -45,7 +45,8 @@ const DEFAULT_CONFIG = {
   activeServer: '',                                        // instancia selecionada no painel (multi)
   systemctlUser: false,                                    // true = usa 'systemctl --user' (rootless, sem sudo)
   integrationsDir: '',                                     // onde ficam os binarios das integracoes (playit/cloudflared); vazio = auto
-  runDir: ''                                               // (modo container) PID files/logs dos processos gerenciados; vazio = auto
+  runDir: '',                                              // (modo container) PID files/logs dos processos gerenciados; vazio = auto
+  curseforgeApiKey: ''                                     // chave da API do CurseForge (console.curseforge.com) — habilita modpacks de lá
 };
 
 function loadConfig() {
@@ -58,6 +59,7 @@ function loadConfig() {
   if (process.env.CRAFTBOX_SERVERS_DIR) cfg.serversDir = process.env.CRAFTBOX_SERVERS_DIR;
   if (process.env.CRAFTBOX_INTEGRATIONS_DIR) cfg.integrationsDir = process.env.CRAFTBOX_INTEGRATIONS_DIR;
   if (process.env.CRAFTBOX_RUN_DIR) cfg.runDir = process.env.CRAFTBOX_RUN_DIR;
+  if (process.env.CRAFTBOX_CURSEFORGE_KEY) cfg.curseforgeApiKey = process.env.CRAFTBOX_CURSEFORGE_KEY;
   if (process.env.CRAFTBOX_PORT) { const p = parseInt(process.env.CRAFTBOX_PORT, 10); if (p > 0) cfg.port = p; }
   if (!cfg.sessionSecret) {
     cfg.sessionSecret = crypto.randomBytes(32).toString('hex');
@@ -726,7 +728,7 @@ async function installProject(slug, loader, mcVersion, versionId, visited, depth
     title: proj ? proj.title : ((man[slug] && man[slug].title) || slug),
     icon: proj ? proj.icon : (man[slug] && man[slug].icon) || null,
     filename: v.filename, versionId: v.id, versionNumber: v.versionNumber,
-    type: loader === 'fabric' ? 'mod' : 'plugin', disabled: false, installedAt: Date.now(),
+    type: ['fabric', 'quilt', 'forge', 'neoforge'].includes(loader) ? 'mod' : 'plugin', disabled: false, installedAt: Date.now(),
   };
   writeManifest(man);
   const installed = [{ slug, title: man[slug].title, filename: v.filename, version: v.versionNumber, dep: depth > 0 }];
@@ -863,6 +865,44 @@ async function fabricResolveServer(version) {
   const url = `https://meta.fabricmc.net/v2/versions/loader/${encodeURIComponent(ver)}/${encodeURIComponent(loader)}/${encodeURIComponent(inst)}/server/jar`;
   return { version: ver, url };
 }
+// compara versoes numericas ("1.20.1" < "1.21", "21.1.77" < "21.1.100")
+function cmpVer(a, b) {
+  const pa = String(a).split(/[.\-]/).map(x => parseInt(x, 10) || 0), pb = String(b).split(/[.\-]/).map(x => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d; }
+  return 0;
+}
+// Forge: promotions_slim.json tem "<mc>-recommended"/"<mc>-latest" → build do Forge
+async function forgeResolve(version) {
+  const promos = (await httpsJson('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json')).promos || {};
+  let mc = version;
+  if (!mc) {
+    const mcs = [...new Set(Object.keys(promos).map(k => k.replace(/-(latest|recommended)$/, '')))].filter(v => /^\d+(\.\d+)+$/.test(v));
+    mc = mcs.sort(cmpVer).pop();
+  }
+  const fv = promos[mc + '-recommended'] || promos[mc + '-latest'];
+  if (!fv) throw new Error(`o Forge não tem build pro Minecraft ${mc}`);
+  return { mc, loaderVersion: fv };
+}
+// NeoForge numera pela versão do MC: 1.21.1 → 21.1.x | 1.21 → 21.0.x | 26.1.2 → 26.1.2.x | 26.2 → 26.2.0.x
+function neoPrefix(mc) {
+  const p = String(mc).split('.').map(Number);
+  if (p[0] === 1) return `${p[1]}.${p[2] || 0}.`;
+  return `${p[0]}.${p[1] || 0}.${p[2] || 0}.`;
+}
+function neoToMc(nv) {
+  const p = String(nv).split(/[.\-]/).map(Number);
+  if (p[0] >= 26) return `${p[0]}.${p[1]}` + (p[2] ? `.${p[2]}` : '');
+  return `1.${p[0]}` + (p[1] ? `.${p[1]}` : '');
+}
+async function neoforgeResolve(version) {
+  const all = ((await httpsJson('https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge')).versions || [])
+    .filter(v => /^\d+\.\d+\.\d+/.test(v));
+  const cands = version ? all.filter(v => v.startsWith(neoPrefix(version))) : all;
+  if (!cands.length) throw new Error(`o NeoForge não tem build pro Minecraft ${version}`);
+  const stable = cands.filter(v => !/-(beta|alpha)/.test(v));
+  const nv = (stable.length ? stable : cands).sort(cmpVer).pop();
+  return { mc: version || neoToMc(nv), loaderVersion: nv };
+}
 function heapMB() {
   const totalMB = Math.round(os.totalmem() / 1048576);
   return Math.max(512, Math.min(3072, Math.floor(totalMB * 0.4)));
@@ -938,7 +978,7 @@ async function installPumpkin(dir, o) {
 }
 async function createInstance({ name, loader, version }) {
   if (!multiEnabled()) throw new Error('multi-servidor não está ativo (defina serversDir no config.json)');
-  loader = loader === 'fabric' ? 'fabric' : loader === 'pumpkin' ? 'pumpkin' : 'paper';
+  loader = ['fabric', 'forge', 'neoforge', 'pumpkin'].includes(loader) ? loader : 'paper';
   const id = uniqueId(slugifyId(name));
   const dir = path.join(CONFIG.serversDir, id);
   fs.mkdirSync(dir, { recursive: true });
@@ -956,6 +996,29 @@ async function createInstance({ name, loader, version }) {
     writeInstanceMeta(dir, { name: name || id, loader: 'pumpkin', mcVersion: resolvedVer, port, rconPort, rconPassword: rconPass, createdAt: Date.now() });
     if (!CONFIG.activeServer) { CONFIG.activeServer = id; saveConfig(); }
     return { id, name: name || id, loader: 'pumpkin', mcVersion: resolvedVer, port };
+  }
+
+  if (loader === 'forge' || loader === 'neoforge') {
+    installProgress = { name: name || id, phase: 'Resolvendo versão…', done: 0, total: 0, startedAt: Date.now(), at: Date.now() };
+    let r;
+    try {
+      r = loader === 'forge' ? await forgeResolve(version) : await neoforgeResolve(version);
+      setPhase(`Instalando o ${loader === 'forge' ? 'Forge' : 'NeoForge'} ${r.loaderVersion} (MC ${r.mc})… pode levar alguns minutos`);
+      await installLoader(dir, loader, r.mc, r.loaderVersion);
+    } catch (e) {
+      installProgress = null;
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+      throw new Error(`falha ao instalar o ${loader}: ` + e.message);
+    }
+    fs.writeFileSync(path.join(dir, 'eula.txt'), 'eula=true\n');
+    fs.writeFileSync(path.join(dir, '.craftbox-loader'), loader + '\n');
+    writeServerProps(dir, { port, rconPort, rconPass, motd: name });
+    writeForgeStart(dir); writeBackupScript(dir);
+    fs.mkdirSync(path.join(dir, 'mods'), { recursive: true });
+    writeInstanceMeta(dir, { name: name || id, loader, mcVersion: r.mc, loaderVersion: r.loaderVersion, port, createdAt: Date.now() });
+    if (!CONFIG.activeServer) { CONFIG.activeServer = id; saveConfig(); }
+    installProgress = null;
+    return { id, name: name || id, loader, mcVersion: r.mc, loaderVersion: r.loaderVersion, port };
   }
 
   let resolvedVer = version || '';
@@ -1134,20 +1197,34 @@ function findArgsFile(dir) {
   })(path.join(dir, 'libraries'));
   return found[0] ? path.relative(dir, found[0]) : null;
 }
-async function runInstaller(dir, url, label) {
+async function runInstaller(dir, url, label, mc) {
   const jar = path.join(dir, 'installer.jar');
   await download(url, jar);
-  const r = await run('/usr/bin/java', ['-jar', jar, '--installServer'], { cwd: dir, timeout: 900000 });
+  // o wrapper 'java' da imagem Docker escolhe a JDK por CRAFTBOX_JAVA_MAJOR (fora dele é ignorado)
+  const env = { ...process.env, CRAFTBOX_JAVA_MAJOR: String(javaForMc(mc)) };
+  const r = await run('/usr/bin/java', ['-jar', jar, '--installServer'], { cwd: dir, timeout: 900000, env });
   try { fs.unlinkSync(jar); } catch {}
   try { fs.unlinkSync(path.join(dir, 'installer.jar.log')); } catch {}
   if (r.code !== 0) throw new Error(`instalador ${label} falhou: ` + (r.stderr || r.stdout).slice(-250));
 }
 async function installForgeServer(dir, mc, forgeVer) {
   const v = `${mc}-${forgeVer}`;
-  await runInstaller(dir, `https://maven.minecraftforge.net/net/minecraftforge/forge/${v}/forge-${v}-installer.jar`, 'Forge');
+  await runInstaller(dir, `https://maven.minecraftforge.net/net/minecraftforge/forge/${v}/forge-${v}-installer.jar`, 'Forge', mc);
 }
 async function installNeoForgeServer(dir, mc, neoVer) {
-  await runInstaller(dir, `https://maven.neoforged.net/releases/net/neoforged/neoforge/${neoVer}/neoforge-${neoVer}-installer.jar`, 'NeoForge');
+  // no 1.20.1 o NeoForge ainda publicava como net.neoforged:forge:1.20.1-47.1.x
+  if (mc === '1.20.1') {
+    const v = neoVer.startsWith('1.20.1-') ? neoVer : `1.20.1-${neoVer}`;
+    return runInstaller(dir, `https://maven.neoforged.net/releases/net/neoforged/forge/${v}/forge-${v}-installer.jar`, 'NeoForge', mc);
+  }
+  await runInstaller(dir, `https://maven.neoforged.net/releases/net/neoforged/neoforge/${neoVer}/neoforge-${neoVer}-installer.jar`, 'NeoForge', mc);
+}
+async function installLoader(dir, loader, mc, loaderVer) {
+  if (loader === 'fabric') return installFabricServer(dir, mc, loaderVer);
+  if (loader === 'quilt') return installQuiltServer(dir, mc, loaderVer);
+  if (loader === 'forge') return installForgeServer(dir, mc, loaderVer);
+  if (loader === 'neoforge') return installNeoForgeServer(dir, mc, loaderVer);
+  throw new Error('loader não suportado: ' + loader);
 }
 function writeForgeStart(dir) {
   const heap = heapMB();
@@ -1212,10 +1289,7 @@ async function createFromModpack({ name, slug, versionId }) {
     strippedMods = await stripClientMods(dir, loader);
     // loader/servidor
     setPhase(`Instalando o ${loader}… (pode demorar)`);
-    if (loader === 'fabric') await installFabricServer(dir, mc, loaderVer);
-    else if (loader === 'quilt') await installQuiltServer(dir, mc, loaderVer);
-    else if (loader === 'forge') await installForgeServer(dir, mc, loaderVer);
-    else if (loader === 'neoforge') await installNeoForgeServer(dir, mc, loaderVer);
+    await installLoader(dir, loader, mc, loaderVer);
   } catch (e) {
     installProgress = null;
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
@@ -1223,6 +1297,12 @@ async function createFromModpack({ name, slug, versionId }) {
     throw new Error('falha ao instalar o modpack: ' + e.message);
   }
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  let proj = null; try { proj = await modrinthProject(slug); } catch {}
+  const modpack = { source: 'modrinth', slug, versionId: v.id, version: v.versionNumber, name: proj ? proj.title : slug, url: `https://modrinth.com/modpack/${slug}` };
+  return finishPackInstance(id, dir, { name: name || modpack.name, loader, mc, loaderVer, modpack, strippedMods });
+}
+// parte comum a todo modpack (Modrinth/CurseForge): eula, portas, scripts e metadados
+function finishPackInstance(id, dir, { name, loader, mc, loaderVer, modpack, strippedMods, manualMods }) {
   setPhase('Finalizando…');
   const port = freePort(), rconPort = port + 10, rconPass = crypto.randomBytes(6).toString('hex');
   if (!fs.existsSync(path.join(dir, 'eula.txt'))) fs.writeFileSync(path.join(dir, 'eula.txt'), 'eula=true\n');
@@ -1232,12 +1312,187 @@ async function createFromModpack({ name, slug, versionId }) {
   if (loader === 'forge' || loader === 'neoforge') writeForgeStart(dir); else writeStartScript(dir);
   writeBackupScript(dir);
   fs.mkdirSync(path.join(dir, 'mods'), { recursive: true });
-  let proj = null; try { proj = await modrinthProject(slug); } catch {}
-  const modpack = { slug, versionId: v.id, version: v.versionNumber, name: proj ? proj.title : slug, url: `https://modrinth.com/modpack/${slug}` };
-  writeInstanceMeta(dir, { name: name || (proj ? proj.title : slug), loader, mcVersion: mc || '', loaderVersion: loaderVer, port, createdAt: Date.now(), modpack, strippedMods });
+  const meta = { name, loader, mcVersion: mc || '', loaderVersion: loaderVer, port, createdAt: Date.now(), modpack, strippedMods };
+  if (manualMods && manualMods.length) meta.manualMods = manualMods;
+  writeInstanceMeta(dir, meta);
   if (!CONFIG.activeServer) { CONFIG.activeServer = id; saveConfig(); }
   installProgress = null;
-  return { id, name: name || (proj ? proj.title : slug), loader, mcVersion: mc, port, modpack, strippedMods };
+  return { id, name, loader, mcVersion: mc, port, modpack, strippedMods, manualMods: manualMods || [] };
+}
+// ---------------------------------------------------------------------------
+// Modpacks do CurseForge (API v1 — exige chave gratuita do console.curseforge.com)
+// ---------------------------------------------------------------------------
+const CF_API = 'https://api.curseforge.com/v1';
+const CF_GAME = 432, CF_CLASS_MODPACK = 4471, CF_CLASS_RESOURCEPACK = 12, CF_CLASS_SHADER = 6552, CF_CLASS_DATAPACK = 6945;
+const CF_LOADER_TYPE = { forge: 1, fabric: 4, quilt: 5, neoforge: 6 };
+function cfKey() { return String(CONFIG.curseforgeApiKey || '').trim(); }
+// JSON via GET/POST com cabeçalhos (httpsJson só faz GET simples)
+function httpsReq(method, url, { headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const data = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const req = https.request(url, { method, headers: { 'User-Agent': UA, Accept: 'application/json', ...(data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {}), ...headers } }, (r) => {
+      let d = ''; r.on('data', c => d += c);
+      r.on('end', () => {
+        if (r.statusCode !== 200) return reject(Object.assign(new Error('HTTP ' + r.statusCode), { status: r.statusCode }));
+        try { resolve(JSON.parse(d)); } catch (e) { reject(e); }
+      });
+    });
+    req.setTimeout(30000, () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+async function cf(method, pathq, body, key) {
+  const k = key || cfKey();
+  if (!k) throw Object.assign(new Error('configure a chave da API do CurseForge'), { cfKey: true });
+  try { return await httpsReq(method, CF_API + pathq, { headers: { 'x-api-key': k }, body }); }
+  catch (e) {
+    if (e.status === 401 || e.status === 403) throw Object.assign(new Error('chave da API do CurseForge inválida'), { cfKey: true });
+    throw e;
+  }
+}
+async function cfModpackSearch(query, loaderFilter, offsetArg) {
+  const limit = 24;
+  // a API só pagina até index+pageSize <= 10000
+  const offset = Math.min(10000 - limit, Math.max(0, parseInt(offsetArg, 10) || 0));
+  let q = `/mods/search?gameId=${CF_GAME}&classId=${CF_CLASS_MODPACK}&sortField=2&sortOrder=desc&pageSize=${limit}&index=${offset}`;
+  if (query) q += '&searchFilter=' + encodeURIComponent(query);
+  if (CF_LOADER_TYPE[loaderFilter]) q += '&modLoaderType=' + CF_LOADER_TYPE[loaderFilter];
+  const r = await cf('GET', q);
+  const results = (r.data || []).map(m => ({
+    source: 'curseforge', id: String(m.id), slug: m.slug, title: m.name,
+    author: (m.authors && m.authors[0] && m.authors[0].name) || '', description: m.summary,
+    downloads: m.downloadCount, icon: m.logo && (m.logo.thumbnailUrl || m.logo.url),
+    categories: (m.categories || []).map(c => c.name), url: m.links && m.links.websiteUrl,
+  }));
+  const total = Math.min(10000, (r.pagination && r.pagination.totalCount) || 0);
+  return { results, total, offset, limit };
+}
+const CF_RELEASE = { 1: 'release', 2: 'beta', 3: 'alpha' };
+function cfFileVersion(f) {
+  const gv = f.gameVersions || [];
+  return {
+    id: String(f.id), name: f.displayName, versionNumber: f.displayName || f.fileName,
+    gameVersions: gv.filter(x => /^\d/.test(x)),
+    loaders: gv.filter(x => !/^\d/.test(x) && !/^(client|server)$/i.test(x)).map(x => x.toLowerCase()),
+    datePublished: f.fileDate, versionType: CF_RELEASE[f.releaseType] || 'release',
+    url: f.downloadUrl, serverPackFileId: f.serverPackFileId || null,
+  };
+}
+async function cfModpackVersions(projectId) {
+  const r = await cf('GET', `/mods/${encodeURIComponent(projectId)}/files?pageSize=50`);
+  return (r.data || []).filter(f => !f.isServerPack)
+    .sort((a, b) => String(b.fileDate).localeCompare(String(a.fileDate)))
+    .map(cfFileVersion);
+}
+// arquivos cujo autor desligou o download por terceiros vêm com downloadUrl=null:
+// tenta achar o MESMO arquivo (mesmo sha1) no Modrinth — é o que o Prism faz.
+async function modrinthBySha1(hashes) {
+  if (!hashes.length) return {};
+  try {
+    const r = await httpsReq('POST', 'https://api.modrinth.com/v2/version_files', { body: { hashes, algorithm: 'sha1' } });
+    const out = {};
+    for (const [h, v] of Object.entries(r || {})) {
+      const f = (v.files || []).find(x => x.hashes && x.hashes.sha1 === h) || (v.files || [])[0];
+      if (f && f.url) out[h] = f.url;
+    }
+    return out;
+  } catch { return {}; }
+}
+async function createFromCurseForge({ name, projectId, fileId }) {
+  if (!multiEnabled()) throw new Error('multi-servidor não está ativo');
+  installProgress = { name: name || 'modpack', phase: 'Preparando…', done: 0, total: 0, startedAt: Date.now(), at: Date.now() };
+  let project, packFile;
+  try {
+    project = (await cf('GET', `/mods/${encodeURIComponent(projectId)}`)).data;
+    if (fileId) packFile = (await cf('GET', `/mods/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}`)).data;
+    else {
+      const vs = await cfModpackVersions(projectId);
+      const v = pickModpackVersion(vs, null);
+      if (v) packFile = (await cf('GET', `/mods/${encodeURIComponent(projectId)}/files/${v.id}`)).data;
+    }
+  } catch (e) { installProgress = null; throw e; }
+  if (!packFile) { installProgress = null; throw new Error('versão do modpack não encontrada'); }
+  if (!packFile.downloadUrl) { installProgress = null; throw new Error('o autor deste modpack bloqueou downloads fora do app do CurseForge'); }
+  const title = project.name || String(projectId);
+  installProgress.name = name || title;
+  const id = uniqueId(slugifyId(name || project.slug || title));
+  const dir = path.join(CONFIG.serversDir, id);
+  const tmp = path.join(os.tmpdir(), 'craftbox-cfpack-' + id);
+  fs.mkdirSync(dir, { recursive: true }); fs.mkdirSync(tmp, { recursive: true });
+  let loader, mc, loaderVer, strippedMods = [], manualMods = [];
+  try {
+    setPhase('Baixando o modpack…');
+    const zip = path.join(tmp, 'pack.zip');
+    await download(packFile.downloadUrl, zip);
+    await unzipTo(zip, tmp);
+    let manifest;
+    try { manifest = JSON.parse(fs.readFileSync(path.join(tmp, 'manifest.json'), 'utf8')); }
+    catch { throw new Error('manifest.json não encontrado — não é um modpack de cliente do CurseForge'); }
+    mc = manifest.minecraft && manifest.minecraft.version;
+    const mls = (manifest.minecraft && manifest.minecraft.modLoaders) || [];
+    const ml = String((mls.find(x => x.primary) || mls[0] || {}).id || '');
+    const dash = ml.indexOf('-');
+    loader = ml.slice(0, dash).toLowerCase(); loaderVer = ml.slice(dash + 1);
+    if (!['forge', 'neoforge', 'fabric', 'quilt'].includes(loader) || !loaderVer) throw new Error('loader do modpack não reconhecido: ' + (ml || '?'));
+    if (!mc) throw new Error('modpack sem versão do Minecraft no manifest');
+
+    // resolve os arquivos: metadados dos arquivos + dos projetos (pra saber a classe)
+    setPhase('Resolvendo a lista de mods…');
+    const entries = (manifest.files || []).filter(f => f.required !== false && f.fileID && f.projectID);
+    const fileInfo = new Map(), projInfo = new Map();
+    for (let i = 0; i < entries.length; i += 500) {
+      const chunk = entries.slice(i, i + 500);
+      const [fr, pr] = await Promise.all([
+        cf('POST', '/mods/files', { fileIds: chunk.map(f => f.fileID) }),
+        cf('POST', '/mods', { modIds: [...new Set(chunk.map(f => f.projectID))], filterPcOnly: true }),
+      ]);
+      (fr.data || []).forEach(f => fileInfo.set(f.id, f));
+      (pr.data || []).forEach(p => projInfo.set(p.id, p));
+    }
+    const jobs = [], blocked = [];
+    for (const e of entries) {
+      const f = fileInfo.get(e.fileID), p = projInfo.get(e.projectID) || {};
+      if (!f || !f.fileName || /[\\/]/.test(f.fileName) || f.fileName.includes('..')) continue;
+      // resource packs e shaders só servem pro cliente
+      if (p.classId === CF_CLASS_RESOURCEPACK || p.classId === CF_CLASS_SHADER) continue;
+      const folder = p.classId === CF_CLASS_DATAPACK ? path.join('world', 'datapacks') : 'mods';
+      const sha1 = ((f.hashes || []).find(h => h.algo === 1) || {}).value;
+      const job = { url: f.downloadUrl, dest: path.join(dir, folder, f.fileName), sha1, fileName: f.fileName,
+        page: `${(p.links && p.links.websiteUrl) || 'https://www.curseforge.com/minecraft/mc-mods/' + (p.slug || e.projectID)}/files/${e.fileID}` };
+      (job.url ? jobs : blocked).push(job);
+    }
+    if (blocked.length) {
+      const found = await modrinthBySha1(blocked.map(b => b.sha1).filter(Boolean));
+      for (const b of blocked) {
+        if (b.sha1 && found[b.sha1]) jobs.push({ ...b, url: found[b.sha1] });
+        else manualMods.push({ file: b.fileName, folder: path.relative(dir, path.dirname(b.dest)), url: b.page });
+      }
+    }
+    setPhase('Baixando os mods…', { total: jobs.length, done: 0 });
+    await runPool(jobs, 6, async (j) => {
+      fs.mkdirSync(path.dirname(j.dest), { recursive: true });
+      await download(j.url, j.dest);
+      if (installProgress) installProgress.done++;
+    });
+    setPhase('Aplicando arquivos do pack…');
+    const ov = path.join(tmp, String(manifest.overrides || 'overrides').replace(/\.\./g, ''));
+    if (fs.existsSync(ov)) fs.cpSync(ov, dir, { recursive: true });
+    setPhase('Desativando mods client-only…');
+    strippedMods = await stripClientMods(dir, loader);
+    setPhase(`Instalando o ${loader} ${loaderVer}… (pode demorar)`);
+    await installLoader(dir, loader, mc, loaderVer);
+  } catch (e) {
+    installProgress = null;
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+    throw new Error('falha ao instalar o modpack: ' + e.message);
+  }
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  const modpack = { source: 'curseforge', projectId: String(projectId), slug: project.slug, versionId: String(packFile.id), version: packFile.displayName || packFile.fileName, name: title,
+    url: (project.links && project.links.websiteUrl) || `https://www.curseforge.com/minecraft/modpacks/${project.slug}` };
+  return finishPackInstance(id, dir, { name: name || title, loader, mc, loaderVer, modpack, strippedMods, manualMods });
 }
 
 function loaderOf(dir, metaLoader) {
@@ -1255,7 +1510,7 @@ async function listServersDetailed() {
     const ctx = serverCtx(id);
     let active = 'unknown';
     try { active = await svcActiveOf(ctx.service); } catch {}
-    servers.push({ id, name: ctx.name, loader: loaderOf(ctx.dir, ctx.loader), mcVersion: ctx.mcVersion, port: ctx.port, active, selected: id === activeId, modpack: ctx.modpack });
+    servers.push({ id, name: ctx.name, loader: loaderOf(ctx.dir, ctx.loader), mcVersion: ctx.mcVersion, port: ctx.port, active, selected: id === activeId, modpack: ctx.modpack, manualMods: readInstanceMeta(ctx.dir).manualMods || [] });
   }
   return { multi: multiEnabled(), activeId, servers };
 }
@@ -1791,15 +2046,32 @@ const server = http.createServer((req, res) => {
         try { const s = await cloneInstance(b.id, b.name); audit('servidor-clonar', `${b.id} → ${s.name}`); return json(res, 200, { ok: true, server: s }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
+      if (p === '/api/modpacks/sources' && req.method === 'GET') {
+        return json(res, 200, { modrinth: true, curseforge: !!cfKey(), curseforgeFromEnv: !!process.env.CRAFTBOX_CURSEFORGE_KEY });
+      }
+      if (p === '/api/modpacks/curseforge-key' && req.method === 'POST') {
+        if (!isAdmin(sessionUser(req))) return json(res, 403, { error: 'só um admin pode configurar a chave' });
+        const key = String((await readBody(req)).key || '').trim();
+        if (key) {
+          // valida antes de salvar (chamada barata: dados do jogo Minecraft)
+          try { await cf('GET', `/games/${CF_GAME}`, undefined, key); }
+          catch (e) { return json(res, 400, { error: e.cfKey ? 'chave inválida — confira no console.curseforge.com' : 'não deu pra validar: ' + e.message }); }
+        }
+        CONFIG.curseforgeApiKey = key; saveConfig();
+        audit('curseforge-chave', key ? 'configurada' : 'removida');
+        return json(res, 200, { ok: true, curseforge: !!key });
+      }
       if (p === '/api/modpacks/search') {
-        try { return json(res, 200, await modpackSearch(url.searchParams.get('q') || '', url.searchParams.get('loader') || '', url.searchParams.get('offset') || '0')); }
-        catch (e) { return json(res, 502, { error: e.message }); }
+        const src = url.searchParams.get('source') || 'modrinth';
+        const args = [url.searchParams.get('q') || '', url.searchParams.get('loader') || '', url.searchParams.get('offset') || '0'];
+        try { return json(res, 200, src === 'curseforge' ? await cfModpackSearch(...args) : await modpackSearch(...args)); }
+        catch (e) { return json(res, e.cfKey ? 400 : 502, { error: e.message, needKey: !!e.cfKey }); }
       }
       if (p === '/api/modpacks/versions') {
         const slug = url.searchParams.get('slug') || '';
         if (!slug) return json(res, 400, { error: 'slug vazio' });
-        try { return json(res, 200, { versions: await modpackVersions(slug) }); }
-        catch (e) { return json(res, 502, { error: e.message }); }
+        try { return json(res, 200, { versions: url.searchParams.get('source') === 'curseforge' ? await cfModpackVersions(slug) : await modpackVersions(slug) }); }
+        catch (e) { return json(res, e.cfKey ? 400 : 502, { error: e.message, needKey: !!e.cfKey }); }
       }
       if (p === '/api/servers/create-progress' && req.method === 'GET') {
         return json(res, 200, installProgress || { phase: null });
@@ -1807,7 +2079,8 @@ const server = http.createServer((req, res) => {
       if (p === '/api/servers/create-modpack' && req.method === 'POST') {
         const b = await readBody(req);
         if (!b.slug) return json(res, 400, { error: 'modpack não informado' });
-        try { const s = await createFromModpack({ name: b.name, slug: b.slug, versionId: b.versionId }); audit('servidor-modpack', `${s.name} (${b.slug})${s.strippedMods && s.strippedMods.length ? ` · ${s.strippedMods.length} mods client-only desativados` : ''}`); return json(res, 200, { ok: true, server: s }); }
+        if (installProgress) return json(res, 409, { error: 'já tem uma instalação em andamento — espere terminar' });
+        try { const s = b.source === 'curseforge' ? await createFromCurseForge({ name: b.name, projectId: b.slug, fileId: b.versionId }) : await createFromModpack({ name: b.name, slug: b.slug, versionId: b.versionId }); audit('servidor-modpack', `${s.name} (${b.slug})${s.strippedMods && s.strippedMods.length ? ` · ${s.strippedMods.length} mods client-only desativados` : ''}`); return json(res, 200, { ok: true, server: s }); }
         catch (e) { return json(res, 502, { error: e.message }); }
       }
       if (p === '/api/servers' && req.method === 'DELETE') {
