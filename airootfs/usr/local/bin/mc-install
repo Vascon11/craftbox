@@ -689,11 +689,15 @@ do_install() {
   mkdir -p /mnt/boot && mount "$P1" /mnt/boot || fail "não consegui montar $P1"
 
   phase 2
+  # o painel é um binário Rust embarcado na ISO; o Node só entra como fallback
+  # (ISO montada sem o binário)
+  local node_pkg=""
+  [ -x /opt/craftbox-panel/craftbox-panel ] || node_pkg=nodejs
   pacstrap -K /mnt \
     base linux linux-firmware mkinitcpio intel-ucode \
     networkmanager openssh sudo \
     jre-openjdk-headless \
-    git tmux nano vim htop jq curl wget which nodejs \
+    git tmux nano vim htop jq curl wget which unzip $node_pkg \
     msr-tools || fail "pacstrap falhou (rede ou espelho do Arch fora do ar?)"
   genfstab -U /mnt >> /mnt/etc/fstab
   info "criando swap de 2 GB"
@@ -893,6 +897,11 @@ ISSUE
     install -Dm644 /etc/modules-load.d/msr.conf /mnt/etc/modules-load.d/msr.conf 2>/dev/null || true
   fi
 
+  # painel: binário Rust (lê config.json e public/ ao lado dele) ou, sem ele, o server.js
+  local panel_exec="/usr/bin/node /opt/craftbox-panel/server.js"
+  [ -x /mnt/opt/craftbox-panel/craftbox-panel ] && panel_exec="/opt/craftbox-panel/craftbox-panel"
+  info "painel: $panel_exec"
+
   # configuração dentro do chroot (só valores já validados; senhas vão por stdin, fora do script)
   cat > /mnt/root/chroot-setup.sh <<CHROOT
 #!/usr/bin/env bash
@@ -927,7 +936,7 @@ Type=simple
 User=minecraft
 Group=minecraft
 WorkingDirectory=/opt/craftbox-panel
-ExecStart=/usr/bin/node /opt/craftbox-panel/server.js
+ExecStart=$panel_exec
 Restart=on-failure
 RestartSec=5
 [Install]
@@ -964,7 +973,7 @@ CHROOT
   # painel: config com hash da senha (a senha vai como argumento, nunca pro log)
   if [ -d /mnt/opt/craftbox-panel ]; then
     local phash psecret
-    phash=$(arch-chroot /mnt node /opt/craftbox-panel/server.js --hash "$PANELPW" | tail -n +2) || fail "não consegui gerar o hash da senha do painel"
+    phash=$(arch-chroot /mnt $panel_exec --hash "$PANELPW" | tail -n +2) || fail "não consegui gerar o hash da senha do painel"
     psecret=$(head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')
     cat > /mnt/opt/craftbox-panel/config.json <<PCFG
 {

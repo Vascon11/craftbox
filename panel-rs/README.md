@@ -1,14 +1,14 @@
-# panel-rs: backend do painel em Rust (fase 1)
+# panel-rs: backend do painel em Rust
 
 Esta é a reescrita do `panel/server.js` como um binário único, com as **mesmas rotas**, então o frontend em `panel/public` continua o mesmo. O contrato completo e o status de cada rota estão em [`ROUTES.md`](ROUTES.md).
 
-**Fase 1 (esta):** a fundação. Já estão migrados a carga de config, o login e a sessão, os arquivos estáticos, `/api/status`, `/api/diag/mojang`, as respostas 401/404, o shutdown gracioso e a CLI (`--hash`, `--init`, `--version`). As outras rotas respondem `501` até serem migradas.
+**Migração completa:** todas as rotas do Node estão no Rust (fatias 1 a 7 do `ROUTES.md`). São energia e console, backups (com download em streaming), conteúdo do Modrinth, criação de servidores Paper/Fabric/Forge/NeoForge/Pumpkin, modpacks do Modrinth e do CurseForge, integrações (playit, Cloudflare Tunnel, Tailscale), rede, contas e histórico. O **corte** (fatia 8) também está feito: a ISO embarca o binário e o instalador o usa no lugar do `server.js`, e a imagem Docker não tem mais Node (o `docker/init.js` virou `craftbox-panel --docker-init`). O `panel/server.js` continua no repositório como referência do teste de paridade e como fallback do instalador.
 
 ```sh
 cargo build --release                                   # target/release/craftbox-panel
 CRAFTBOX_PANEL_CONFIG=/caminho/config.json \
 CRAFTBOX_PUBLIC_DIR=../panel/public ./target/release/craftbox-panel
-cargo test --release                                    # testes unitários
+cargo test --release                                    # testes unitários (48)
 parity/run.sh                                           # paridade Node × Rust (ver abaixo)
 ```
 
@@ -45,11 +45,12 @@ Em execução (mesmo config, depois de 50 requisições de status e de estático
 
 ## Teste de paridade
 
-`parity/run.sh` sobe o Node (`panel/server.js`) e o Rust **lado a lado**, em portas altas livres e só em `127.0.0.1`. Os dois usam o **mesmo config** (cópias num diretório em `/tmp`; nunca `panel/config.json`, `/mnt/dados` nem a porta 8080). O script faz login nos dois e compara status HTTP, headers de enquadramento, `Set-Cookie`, a ordem das chaves e os valores do JSON. Os valores voláteis (load, memória, ms, uptime) só têm o tipo conferido ou uma tolerância. Cenários cobertos:
+`parity/run.sh` sobe o Node (`panel/server.js`) e o Rust **lado a lado**, em portas altas livres e só em `127.0.0.1`. Os dois usam o **mesmo config** (cópias num diretório em `/tmp`; nunca `panel/config.json`, `/mnt/dados` nem a porta 8080). O script faz login nos dois e compara status HTTP, headers de enquadramento, `Set-Cookie`, a ordem das chaves e os valores do JSON. Os valores voláteis (load, memória, ms, uptime, timestamps) só têm o tipo conferido ou uma tolerância. Cenários:
 
 - **A**: senha única, runner systemd: estáticos (bytes idênticos), login e as variações de erro, **cookie cruzado** (o cookie do Node vale no Rust e vice-versa), token adulterado ou expirado, `/api/status`, `/api/diag/mojang` e auditoria.
-- **B**: multiusuário + multi-servidor, runner exec, com PID files de processos reais e um **servidor RCON falso** (`players` via `server.properties` e via meta da instância). Termina com o **shutdown gracioso** (SIGTERM): os dois param os processos gerenciados e saem com código 0.
-- **C**: config sem `sessionSecret`: os dois geram o segredo e regravam o config.json **idêntico** (segredo mascarado).
-- **Divergência documentada**: um cookie malformado derruba o processo Node (bug B2 no ROUTES.md); o Rust responde 401.
+- **B**: multiusuário + multi-servidor, runner exec, com PID files de processos reais e um **servidor RCON falso**. Termina com o **shutdown gracioso** (SIGTERM).
+- **C**: config sem `sessionSecret`: os dois geram o segredo e regravam o config.json **idêntico**.
+- **D**: as fatias 2 a 7, com uma cópia idêntica dos dados pra cada lado (instância com mundo, logs, backups com `mtime` fixo, plugins e manifesto). Cobre ligar/reiniciar/parar pelo runner, logs com `?lines=` estranhos, backups (listar, baixar em streaming, restaurar, tar inválido), loja de conteúdo (toggle, remover, busca e projeto no Modrinth de verdade), criar/clonar/apagar servidor (inclusive o B1), criação real de um servidor Fabric, modpacks e CurseForge sem chave, integrações, rede, extras, usuários (1º usuário vira admin e ganha cookie), troca de senha e histórico. Depois de cada escrita, compara também **os arquivos gravados** (`server.properties`, meta, manifesto, `config.json`), mascarando só o que é aleatório.
+- **Divergências documentadas**: um cookie malformado derruba o processo Node (B2); o Rust responde 401. No B5 o Rust mantém ip/usuário na auditoria de ligar/desligar; o comparador trata isso como esperado.
 
-O número de verificações e o último resultado real estão no relatório da fase.
+Último resultado: **216 verificações iguais, 0 diferenças.** Fora do harness, um modpack real (Fabulously Optimized 6.5.0, 50 arquivos) instalado nos dois backends gerou respostas byte a byte iguais e a mesma árvore de 120 arquivos; o servidor subiu e parou pelo runner do Rust com o mundo salvo.

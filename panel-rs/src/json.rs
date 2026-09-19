@@ -11,6 +11,8 @@ use std::fmt::Write as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
+    /// `undefined` do JS: some como valor de objeto no stringify e vira `null` em array
+    Undef,
     Null,
     Bool(bool),
     Num(f64),
@@ -112,6 +114,10 @@ impl Value {
     }
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
+    }
+    /// `v.k` que pode ser undefined (campo ausente → `Undef`, que some no stringify)
+    pub fn fld(&self, k: &str) -> Value {
+        self.get(k).cloned().unwrap_or(Value::Undef)
     }
 }
 
@@ -266,7 +272,7 @@ fn quote(out: &mut String, s: &str) {
 
 fn write_value(out: &mut String, v: &Value, indent: Option<&str>, level: usize) {
     match v {
-        Value::Null => out.push_str("null"),
+        Value::Null | Value::Undef => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Num(n) => {
             if n.is_finite() {
@@ -293,12 +299,13 @@ fn write_value(out: &mut String, v: &Value, indent: Option<&str>, level: usize) 
             out.push(']');
         }
         Value::Obj(m) => {
-            if m.is_empty() {
+            let entries: Vec<(&String, &Value)> = m.iter().filter(|(_, v)| !matches!(v, Value::Undef)).collect();
+            if entries.is_empty() {
                 out.push_str("{}");
                 return;
             }
             out.push('{');
-            for (i, (k, item)) in m.iter().enumerate() {
+            for (i, (k, item)) in entries.into_iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
@@ -589,6 +596,14 @@ mod tests {
             stringify_pretty(&v),
             "{\n  \"port\": 8080,\n  \"rcon\": {\n    \"host\": \"127.0.0.1\"\n  },\n  \"users\": [],\n  \"e\": {}\n}"
         );
+    }
+
+    #[test]
+    fn undefined_like_js() {
+        let v = obj! {"a" => Value::Undef, "b" => 1, "c" => Value::Arr(vec![Value::Undef])};
+        assert_eq!(stringify(&v), r#"{"b":1,"c":[null]}"#);
+        assert_eq!(stringify(&obj! {"a" => Value::Undef}), "{}");
+        assert_eq!(stringify_pretty(&obj! {"a" => Value::Undef}), "{}");
     }
 
     #[test]

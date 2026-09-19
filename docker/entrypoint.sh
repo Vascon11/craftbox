@@ -1,5 +1,5 @@
 #!/bin/sh
-# entrypoint do container craftbox: prepara /data e sobe o painel.
+# entrypoint do container craftbox: prepara /data e sobe o painel (binário Rust).
 set -e
-node /app/docker/init.js
-exec node /app/server.js
+/app/craftbox-panel --docker-init
+exec /app/craftbox-panel

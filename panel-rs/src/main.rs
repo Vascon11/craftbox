@@ -5,6 +5,7 @@
 //!   craftbox-panel                 # sobe o painel
 //!   craftbox-panel --hash SENHA    # gera o hash da senha p/ o config.json
 //!   craftbox-panel --init          # cria um config.json inicial
+//!   craftbox-panel --docker-init   # prepara o /data do container (o antigo docker/init.js)
 //!   craftbox-panel --version
 //!
 //! Config: config.json ao lado do binário, ou CRAFTBOX_PANEL_CONFIG.
@@ -13,15 +14,21 @@
 mod audit;
 mod auth;
 mod config;
+mod content;
 mod crypto;
 mod ctx;
 mod diag;
+mod dockerinit;
 mod http;
+mod integrations;
 mod json;
 mod jsutil;
+mod modpacks;
+mod net;
 mod rcon;
 mod routes;
 mod runner;
+mod servers;
 mod stats;
 
 use json::{Map, Value};
@@ -39,6 +46,14 @@ impl State {
     /// Cópia do config atual (é pequeno; evita segurar lock durante a requisição).
     pub fn cfg(&self) -> Map {
         self.cfg.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    /// Altera o config em memória e grava o arquivo inteiro (`saveConfig()`)
+    /// quando `f` devolve true. O lock serializa as gravações concorrentes.
+    pub fn set_cfg(&self, f: impl FnOnce(&mut Map) -> bool) {
+        let mut g = self.cfg.write().unwrap_or_else(|e| e.into_inner());
+        if f(&mut g) {
+            config::save(&self.config_path, &g);
+        }
     }
 }
 
@@ -119,6 +134,9 @@ fn main() {
         println!("{}", json::stringify_pretty(&obj! { "salt" => salt, "hash" => hash }));
         return;
     }
+    if args.get(1).map(String::as_str) == Some("--docker-init") {
+        std::process::exit(dockerinit::run());
+    }
     if args.get(1).map(String::as_str) == Some("--init") {
         if std::path::Path::new(&config_path).exists() {
             eprintln!("config.json ja existe.");
@@ -169,8 +187,11 @@ fn main() {
     }
     if st.exec_runner {
         println!("[runner] modo container ativo (gerenciando processos em {})", runner::run_dir(&cfg));
-        // autostartServers() depende de svcAction('start') — entra com a fatia "energia"
-        println!("[runner] auto-start de servidores ainda não migrado pro backend Rust (pendente)");
+        let st2 = st.clone();
+        std::thread::spawn(move || {
+            routes::autostart_servers(&st2);
+            println!("[runner] auto-start de servidores concluído");
+        });
     }
 
     let handler_state = st.clone();

@@ -48,7 +48,7 @@ services:
     mem_limit: "${CRAFTBOX_MEM_LIMIT:-4g}"
 
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/) && [ $$code -gt 0 ] && [ $$code -lt 500 ]"]
       interval: 30s
       timeout: 5s
       retries: 3

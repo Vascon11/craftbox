@@ -17,11 +17,11 @@ Sem ambiente gráfico, sem peso: toda a RAM sobra pro jogo.
 
 ## Interface — painel web `craftbox-panel`
 
-O craftbox vem com um **painel web** (**Node.js puro, zero dependências**) pra gerenciar tudo pelo navegador, com cara de painel de hosting profissional e login por senha. Veja [`panel/`](panel/).
+O craftbox vem com um **painel web** pra gerenciar tudo pelo navegador, com cara de painel de hosting profissional e login por senha. O backend é um **binário único em Rust** ([`panel-rs/`](panel-rs/), ~3 MB, ~4 MB de RAM), com as mesmas rotas do backend Node original ([`panel/`](panel/)), conferidas por um teste de paridade lado a lado.
 
 ![Painel — dashboard](screenshots/painel-dashboard.jpg)
 
-- 🖥️ **Multi-servidor** — crie/clone/apague vários servidores (**Paper**, **Fabric** ou **Pumpkin** — servidor em Rust, experimental), cada um com loader, versão e porta próprios; troca entre eles por um seletor. Filosofia "um rodando por vez" pra hardware fraco.
+- 🖥️ **Multi-servidor** — crie/clone/apague vários servidores (**Paper**, **Fabric**, **Forge**, **NeoForge** ou **Pumpkin** — servidor em Rust, experimental), cada um com loader, versão e porta próprios; troca entre eles por um seletor. Filosofia "um rodando por vez" pra hardware fraco.
 - 📊 **Painel** — status (no ar/desligado), jogadores online (RCON) e stats em tempo real: frequência de CPU, RAM, disco, temperatura, load, **peso do mundo** e **velocidade da internet** (sob demanda).
 - ⏻ **Ligar / reiniciar / desligar** via systemd (ou `systemctl --user`, modo **rootless** sem sudo; no Docker, runner de processos diretos).
 - 🧩 **Loja de mods/plugins** estilo Prism/Modrinth — busca no [Modrinth](https://modrinth.com) com ícones, categorias e ordenação, **escolha de versão**, **dependências automáticas** e gestão dos instalados (ativar/desativar, atualizar, remover).
@@ -229,12 +229,12 @@ craftbox/
 │   ├── usr/local/bin/mc-install    # o instalador (coração do projeto)
 │   ├── root/.zprofile              # abre o instalador automaticamente no boot
 │   └── etc/motd
-├── panel/                          # o painel web (embarcado na ISO pelo build)
+├── panel/                          # frontend do painel (public/) + backend Node original (referência/fallback)
+├── panel-rs/                       # backend do painel em Rust (o que roda na ISO e no Docker)
 ├── docker/
-│   ├── entrypoint.sh               # prepara /data e sobe o painel no container
-│   ├── init.js                     # cria config.json + semeia binários de túnel
+│   ├── entrypoint.sh               # prepara /data (craftbox-panel --docker-init) e sobe o painel
 │   └── java-select                 # wrapper: escolhe JDK 8/17/21/25 pelo MC version
-├── Dockerfile                      # imagem: Node 22 + JDK 8/17/21/25 + túneis
+├── Dockerfile                      # imagem: painel Rust + JDK 8/17/21/25 + túneis (sem Node)
 ├── docker-compose.yml              # compose pronto (volumes, portas 25565-75, envs)
 ├── packages.extra                  # pacotes extras do ambiente live
 ├── scripts/build-in-container.sh   # monta a ISO (roda dentro do container Arch)

@@ -109,7 +109,7 @@ pub fn math_round(x: f64) -> f64 {
 /// Truthiness do JS.
 pub fn truthy(v: Option<&Value>) -> bool {
     match v {
-        None | Some(Value::Null) => false,
+        None | Some(Value::Null) | Some(Value::Undef) => false,
         Some(Value::Bool(b)) => *b,
         Some(Value::Num(n)) => *n != 0.0 && !n.is_nan(),
         Some(Value::Str(s)) => !s.is_empty(),
@@ -120,7 +120,7 @@ pub fn truthy(v: Option<&Value>) -> bool {
 /// `String(x)` (undefined vira "undefined").
 pub fn to_string(v: Option<&Value>) -> String {
     match v {
-        None => "undefined".into(),
+        None | Some(Value::Undef) => "undefined".into(),
         Some(Value::Null) => "null".into(),
         Some(Value::Bool(b)) => b.to_string(),
         Some(Value::Num(n)) => num_to_string(*n),
@@ -128,7 +128,7 @@ pub fn to_string(v: Option<&Value>) -> String {
         Some(Value::Arr(a)) => a
             .iter()
             .map(|x| match x {
-                Value::Null => String::new(),
+                Value::Null | Value::Undef => String::new(),
                 other => to_string(Some(other)),
             })
             .collect::<Vec<_>>()
@@ -276,6 +276,104 @@ pub fn homedir() -> String {
 pub fn now_ms() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
 }
+
+/// `e.message` de um erro do `fs.*Sync` do Node:
+/// `ENOENT: no such file or directory, unlink '/x'`.
+pub fn fs_err(e: &std::io::Error, syscall: &str, path: &str) -> String {
+    let (code, desc) = match e.raw_os_error() {
+        Some(libc::ENOENT) => ("ENOENT", "no such file or directory"),
+        Some(libc::EACCES) => ("EACCES", "permission denied"),
+        Some(libc::EPERM) => ("EPERM", "operation not permitted"),
+        Some(libc::EEXIST) => ("EEXIST", "file already exists"),
+        Some(libc::EISDIR) => ("EISDIR", "illegal operation on a directory"),
+        Some(libc::ENOTDIR) => ("ENOTDIR", "not a directory"),
+        Some(libc::ENOTEMPTY) => ("ENOTEMPTY", "directory not empty"),
+        Some(libc::ENOSPC) => ("ENOSPC", "no space left on device"),
+        Some(libc::EROFS) => ("EROFS", "read-only file system"),
+        Some(libc::EXDEV) => ("EXDEV", "cross-device link not permitted"),
+        _ => return e.to_string(),
+    };
+    format!("{}: {}, {} '{}'", code, desc, syscall, path)
+}
+
+/// Letra base de um caractere com decomposição canônica (NFD) em base + marcas
+/// combinantes, no alfabeto latino. Cobre o que um nome de servidor em
+/// português/espanhol/francês/alemão tem; letras sem decomposição (ø, æ, ł, đ)
+/// ficam como estão, igual ao NFD.
+fn nfd_base(c: char) -> Option<char> {
+    Some(match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' | 'ǎ' => 'a',
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => 'c',
+        'ď' => 'd',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => 'e',
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => 'g',
+        'ĥ' => 'h',
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ǐ' => 'i',
+        'ĵ' => 'j',
+        'ķ' => 'k',
+        'ĺ' | 'ļ' | 'ľ' => 'l',
+        'ñ' | 'ń' | 'ņ' | 'ň' => 'n',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ō' | 'ŏ' | 'ő' | 'ǒ' => 'o',
+        'ŕ' | 'ŗ' | 'ř' => 'r',
+        'ś' | 'ŝ' | 'ş' | 'š' | 'ș' => 's',
+        'ţ' | 'ť' | 'ț' => 't',
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'ǔ' => 'u',
+        'ŵ' => 'w',
+        'ý' | 'ÿ' | 'ŷ' => 'y',
+        'ź' | 'ż' | 'ž' => 'z',
+        _ => return None,
+    })
+}
+
+/// `s.normalize('NFD').replace(/[̀-ͯ]/g, '')` (em texto já minúsculo).
+pub fn strip_accents(s: &str) -> String {
+    s.chars().filter(|c| !('\u{300}'..='\u{36f}').contains(c)).map(|c| nfd_base(c).unwrap_or(c)).collect()
+}
+
+/// `slugifyId(name)` do server.js: minúsculas, sem acento, `[^a-z0-9]+` → `-`,
+/// sem hífen nas pontas, até 32 caracteres; vazio vira "server".
+pub fn slugify_id(name: &str) -> String {
+    let base = strip_accents(&name.to_lowercase());
+    let mut out = String::new();
+    let mut dash = false;
+    for c in base.chars() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            if dash && !out.is_empty() {
+                out.push('-');
+            }
+            dash = false;
+            out.push(c);
+        } else {
+            dash = true;
+        }
+    }
+    // o Node corta DEPOIS de tirar os hífens das pontas: pode sobrar um no fim
+    let s: String = out.chars().take(32).collect();
+    if s.is_empty() {
+        "server".into()
+    } else {
+        s
+    }
+}
+
+/// Aproximação de `a.localeCompare(b)` (ICU, locale padrão) suficiente pra
+/// ordenar títulos: compara ignorando acento e caixa; empate → minúscula antes
+/// da maiúscula; depois a ordem de código.
+pub fn locale_compare(a: &str, b: &str) -> std::cmp::Ordering {
+    let key = |s: &str| strip_accents(&s.to_lowercase());
+    key(a)
+        .cmp(&key(b))
+        .then_with(|| {
+            for (x, y) in a.chars().zip(b.chars()) {
+                if x != y && x.to_lowercase().eq(y.to_lowercase()) {
+                    return if x.is_lowercase() { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+                }
+            }
+            std::cmp::Ordering::Equal
+        })
+        .then_with(|| a.cmp(b))
+}
+
 
 #[cfg(test)]
 mod tests {

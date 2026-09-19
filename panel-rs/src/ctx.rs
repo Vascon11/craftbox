@@ -80,10 +80,11 @@ pub fn server_ctx(cfg: &Map, id: &str) -> Srv {
             service: config::s(cfg, "service"),
             name: Value::from("Servidor"),
             legacy: true,
-            loader: Value::Null,
-            mc_version: Value::Null,
+            // no Node o contexto legado não tem essas chaves (undefined → somem do JSON)
+            loader: Value::Undef,
+            mc_version: Value::Undef,
             port: None,
-            modpack: Value::Null,
+            modpack: Value::Undef,
             rcon_port: None,
             rcon_password: None,
         };
@@ -140,9 +141,72 @@ pub fn read_props(dir: &str) -> Map {
     out
 }
 
+/// `writeInstanceMeta(dir, meta)`: cria a pasta e grava com indentação 2; erros ignorados.
+pub fn write_instance_meta(dir: &str, meta: &Map) {
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(instance_meta_path(dir), json::stringify_pretty(&Value::Obj(meta.clone())));
+}
+
+/// `writeProps(updates)` / `updatePropsFile(dir, updates)`: atualiza as chaves
+/// existentes no lugar (preservando comentários e ordem), acrescenta as novas
+/// no fim e grava sem `\n` final. O valor vira `String(v)`.
+pub fn write_props(dir: &str, updates: &Map) -> std::io::Result<()> {
+    let p = jsutil::path_join(&[dir, "server.properties"]);
+    let text = std::fs::read(&p).map(|b| String::from_utf8_lossy(&b).into_owned()).ok();
+    let mut lines: Vec<String> = match &text {
+        Some(t) => t.split('\n').map(String::from).collect(),
+        None => Vec::new(),
+    };
+    let mut seen: Vec<String> = Vec::new();
+    for line in lines.iter_mut() {
+        let t = jsutil::trim(line).to_string();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let Some(i) = t.find('=') else { continue };
+        let key = &t[..i];
+        if let Some(v) = updates.get(key) {
+            seen.push(key.to_string());
+            *line = format!("{}={}", key, jsutil::to_string(Some(v)));
+        }
+    }
+    for (k, v) in updates.iter() {
+        if !seen.iter().any(|s| s == k) {
+            lines.push(format!("{}={}", k, jsutil::to_string(Some(v))));
+        }
+    }
+    std::fs::write(&p, lines.join("\n"))
+}
+
+/// Atalho: `writeProps({k: v, ...})` com valores string.
+pub fn write_props_kv(dir: &str, kv: &[(&str, &str)]) -> std::io::Result<()> {
+    let mut m = Map::new();
+    for (k, v) in kv {
+        m.insert(*k, Value::from(*v));
+    }
+    write_props(dir, &m)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_props_like_node() {
+        let d = std::env::temp_dir().join(format!("cbrs-wprops-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("server.properties"), "#c\nmotd=a\n\nmax-players=5\n").unwrap();
+        let mut u = Map::new();
+        u.insert("max-players", Value::Num(10.0));
+        u.insert("nova", Value::Bool(true));
+        u.insert("2", Value::from("x")); // chave numérica: o V8 enumera primeiro
+        write_props(d.to_str().unwrap(), &u).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.join("server.properties")).unwrap(),
+            "#c\nmotd=a\n\nmax-players=10\n\n2=x\nnova=true"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn props_parse_like_node() {

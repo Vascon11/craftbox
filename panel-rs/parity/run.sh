@@ -178,6 +178,68 @@ else
   echo "C 0 1 0" >>"$SUMMARY"
 fi
 
+# ---------------------------------------------------------------------------
+# Cenário D: fatias 2–7. Uma fixture completa (instância com mundo, logs,
+# backups com mtime fixo, plugins + manifesto; outra Fabric sem start.sh) é
+# montada uma vez e copiada com `cp -a` pra cada lado: as rotas gravam arquivos
+# e o comparador confere os arquivos resultantes dos dois backends.
+# ---------------------------------------------------------------------------
+F="$WORK/d-fixture"; A="$F/servers/alpha"; B="$F/servers/beta"
+mkdir -p "$A/world/region" "$A/world_nether" "$A/logs" "$A/backups" "$A/plugins" "$B/mods" "$B/world"
+echo '{"name":"Alpha","loader":"paper","mcVersion":"1.21.1","port":25565}' >"$A/.craftbox-instance.json"
+printf '#Minecraft server properties\nmotd=A craftbox\nlevel-name=world\nmax-players=10\nonline-mode=true\n' >"$A/server.properties"
+printf '#!/usr/bin/env bash\nexec sleep 300\n' >"$A/start.sh"
+printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\nmkdir -p backups\ntar -czf backups/world-z.tar.gz world 2>/dev/null\n' >"$A/backup.sh"
+chmod +x "$A/start.sh" "$A/backup.sh"
+for i in $(seq 1 12); do echo "[10:00:$i] [Server thread/INFO]: linha $i"; done >"$A/logs/latest.log"
+echo "[10:00:00] Starting minecraft server version 1.21.1" >>"$A/logs/latest.log"
+head -c 5000 /dev/zero >"$A/world/level.dat"; head -c 12345 /dev/zero >"$A/world/region/r.0.0.mca"; head -c 777 /dev/zero >"$A/world_nether/x.dat"
+(cd "$A" && tar --mtime='2026-01-01' -cf - world | gzip -n >"backups/world-a.tar.gz")
+echo "dados" >"$A/world/level.dat"   # o restore tem que trazer de volta o original
+head -c 2048 /dev/urandom | gzip -n >"$A/backups/world-b.tar.gz"
+echo "isto não é tar" >"$A/backups/quebrado.tar.gz"
+touch -d '2026-03-01 10:00:00.123456789' "$A/backups/world-a.tar.gz"
+touch -d '2026-03-02 11:00:00' "$A/backups/world-b.tar.gz"; touch -d '2026-02-01' "$A/backups/quebrado.tar.gz"
+head -c 3000 /dev/zero >"$A/plugins/a.jar"; head -c 1500000 /dev/zero >"$A/plugins/b.jar.disabled"; head -c 10 /dev/zero >"$A/plugins/c.jar"
+echo x >"$A/plugins/leia-me.txt"
+cat >"$A/.craftbox-content.json" <<'JSON'
+{
+  "fake-slug-xyz": { "projectId": "abc", "title": "Zeta Plugin", "icon": null, "filename": "a.jar", "versionId": "v1", "versionNumber": "1.0", "type": "plugin", "disabled": false, "installedAt": 1 },
+  "sumido": { "title": "Sumido", "filename": "nao-tem.jar", "versionId": "v2" }
+}
+JSON
+echo '{"name":"Beta Fabric","loader":"fabric","mcVersion":"1.20.1","port":25566}' >"$B/.craftbox-instance.json"
+printf 'level-name=world\nonline-mode=false\n' >"$B/server.properties"
+head -c 100 /dev/zero >"$B/world/level.dat"
+for k in node rust; do
+  cp -a "$F" "$WORK/d-$k"
+  cat >"$WORK/d-$k/config.json" <<CFG
+{
+  "host": "127.0.0.1",
+  "auth": { "salt": "$SALT", "hash": "$HASH" },
+  "sessionSecret": "$SECRET",
+  "activeServer": "alpha",
+  "serversDir": "$WORK/d-$k/servers",
+  "runDir": "$WORK/d-$k/run",
+  "integrationsDir": "$WORK/d-$k/integrations",
+  "auditLog": "$WORK/d-$k/audit.log"
+}
+CFG
+done
+PN="$(freeport)"; PR="$(freeport)"; while [ "$PR" = "$PN" ]; do PR="$(freeport)"; done
+start node "$WORK/d-node/config.json" "$PN" "$WORK/d-node.log" CRAFTBOX_RUNNER=exec HOME="$WORK/d-node/home"; NPID=$LAST_PID
+start rust "$WORK/d-rust/config.json" "$PR" "$WORK/d-rust.log" CRAFTBOX_RUNNER=exec HOME="$WORK/d-rust/home"; RPID=$LAST_PID
+wait_port "$PN" "$NPID" || { echo "Node não subiu"; cat "$WORK/d-node.log"; exit 2; }
+wait_port "$PR" "$RPID" || { echo "Rust não subiu"; cat "$WORK/d-rust.log"; exit 2; }
+echo
+echo "  D: Node em :$PN, Rust em :$PR"
+SCENARIO=D NODE_BASE="http://127.0.0.1:$PN" RUST_BASE="http://127.0.0.1:$PR" NORM_NODE="$WORK/d-node" NORM_RUST="$WORK/d-rust" \
+  AUDIT_NODE="$WORK/d-node/audit.log" AUDIT_RUST="$WORK/d-rust/audit.log" \
+  node "$HERE/compare.mjs" || STATUS=1
+kill "$NPID" "$RPID" 2>/dev/null; wait "$NPID" "$RPID" 2>/dev/null
+# processos de teste que sobraram (o shutdown gracioso já para; isto é só garantia)
+for f in "$WORK"/d-*/run/*.pid; do [ -f "$f" ] && kill "$(head -1 "$f")" 2>/dev/null; done
+
 echo
 awk '{o+=$2; f+=$3; n+=$4} END {printf "RESUMO: %d ok, %d falha(s), %d nota(s)\n", o, f, n}' "$SUMMARY"
 exit $STATUS

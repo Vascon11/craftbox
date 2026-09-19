@@ -28,6 +28,14 @@ mkdir -p /tmp/profile/airootfs/opt/craftbox-panel
 cp -rT /build/panel /tmp/profile/airootfs/opt/craftbox-panel
 rm -f /tmp/profile/airootfs/opt/craftbox-panel/config.json
 
+# 2c) painel em Rust (panel-rs): binário único no lugar do server.js. O perfil
+# `dist` (LTO) sai com x86-64 genérico, então roda em qualquer CPU. O mc-install
+# usa o binário se existir e cai pro Node se não.
+pacman -S --noconfirm --needed rust
+CARGO_TARGET_DIR=/tmp/cargo-target cargo build --manifest-path /build/panel-rs/Cargo.toml --profile dist --locked
+install -m755 /tmp/cargo-target/dist/craftbox-panel /tmp/profile/airootfs/opt/craftbox-panel/craftbox-panel
+/tmp/profile/airootfs/opt/craftbox-panel/craftbox-panel --version
+
 # 3) identidade da ISO
 sed -i 's/^iso_name=.*/iso_name="craftbox"/'                                   /tmp/profile/profiledef.sh
 sed -i "s/^iso_label=.*/iso_label=\"CRAFTBOX_$(date +%Y%m)\"/"                 /tmp/profile/profiledef.sh
@@ -36,6 +44,7 @@ sed -i 's/^iso_application=.*/iso_application="craftbox - Minecraft Server Appli
 
 # 4) permissao correta do instalador na imagem final
 sed -i '/^file_permissions=(/a\  ["/usr/local/bin/mc-install"]="0:0:755"' /tmp/profile/profiledef.sh
+sed -i '/^file_permissions=(/a\  ["/opt/craftbox-panel/craftbox-panel"]="0:0:755"' /tmp/profile/profiledef.sh
 
 # constroi
 mkdir -p /out

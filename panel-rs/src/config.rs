@@ -26,6 +26,7 @@ pub fn default_config() -> Map {
         "systemctlUser" => false,
         "integrationsDir" => "",
         "runDir" => "",
+        "curseforgeApiKey" => "",
     } {
         Value::Obj(m) => m,
         _ => unreachable!(),

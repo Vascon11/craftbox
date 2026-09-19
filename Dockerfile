@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
 # craftbox — painel web + runtime Minecraft em um único container.
-# Multi-estágio: JDKs (8/17/21/25) do Adoptium são copiadas para o container final.
+# Multi-estágio: o painel (Rust, panel-rs) é compilado num estágio próprio e as
+# JDKs (8/17/21/25) do Adoptium são copiadas para o container final. Sem Node.
 #
 # Modo container (sem systemd): o painel gerencia os servidores e túneis
 # diretamente via child_process (CRAFTBOX_RUNNER=exec) — sem Docker socket.
@@ -11,8 +12,15 @@ FROM eclipse-temurin:17-jre AS jdk17
 FROM eclipse-temurin:21-jre AS jdk21
 FROM eclipse-temurin:25-jre AS jdk25
 
-# Node 22 (LTS em manutenção; o 20 saiu de suporte em abr/2026)
-FROM node:22-bookworm-slim AS base
+# painel: binário único, perfil `dist` (LTO), mesma glibc da imagem final
+FROM rust:1-bookworm AS panel
+WORKDIR /src
+COPY panel-rs/Cargo.toml panel-rs/Cargo.lock ./
+COPY panel-rs/src ./src
+RUN cargo build --profile dist --locked \
+    && ./target/dist/craftbox-panel --version
+
+FROM debian:bookworm-slim AS base
 
 ARG TARGETARCH=amd64
 
@@ -67,8 +75,8 @@ RUN chmod +x /usr/local/bin/java \
 # Aplicação
 WORKDIR /app
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint
-COPY docker/init.js /app/docker/init.js
-COPY panel/ /app/
+COPY --from=panel /src/target/dist/craftbox-panel /app/craftbox-panel
+COPY panel/public /app/public
 
 # Configuração padrão do container (sobrescrevável por env no compose)
 ENV CRAFTBOX_RUNNER=exec \
@@ -86,6 +94,6 @@ EXPOSE 8080 25565-25575/tcp 25565-25575/udp
 # saúde = painel respondendo HTTP (o compose pode sobrescrever). start-period
 # cobre o init.js; a porta segue CRAFTBOX_PORT (default 8080).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.CRAFTBOX_PORT||8080)+'/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
+  CMD code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CRAFTBOX_PORT:-8080}/") && [ "$code" -gt 0 ] && [ "$code" -lt 500 ]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint"]

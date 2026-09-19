@@ -65,12 +65,14 @@ pub struct Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// corpo lido de um arquivo em streaming (o `createReadStream(f).pipe(res)` do Node)
+    pub stream: Option<std::fs::File>,
 }
 
 impl Response {
     #[allow(dead_code)]
     pub fn new(status: u16) -> Self {
-        Response { status, headers: Vec::new(), body: Vec::new() }
+        Response { status, headers: Vec::new(), body: Vec::new(), stream: None }
     }
     /// `res.setHeader` antes do `writeHead`: o Node emite esses primeiro.
     pub fn header_first(mut self, k: &str, v: &str) -> Self {
@@ -79,7 +81,7 @@ impl Response {
     }
     /// `res.writeHead(code); res.end(text)` (sem Content-Type, como no Node)
     pub fn plain(status: u16, text: &str) -> Self {
-        Response { status, headers: Vec::new(), body: text.as_bytes().to_vec() }
+        Response { status, headers: Vec::new(), body: text.as_bytes().to_vec(), stream: None }
     }
 }
 
@@ -285,7 +287,7 @@ fn read_chunked(r: &mut BufReader<TcpStream>) -> Result<Vec<u8>, ReadErr> {
 /// em HTTP/1.1 e fecha a conexão em HTTP/1.0. HEAD não leva corpo nem framing.
 fn write_response(
     s: &mut TcpStream,
-    resp: &Response,
+    resp: &mut Response,
     head_only: bool,
     keep_alive: bool,
     http10: bool,
@@ -307,6 +309,27 @@ fn write_response(
     }
     h.push_str("\r\n");
     let mut out = h.into_bytes();
+    if let (Some(f), false) = (resp.stream.as_mut(), head_only) {
+        s.write_all(&out)?;
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            let n = f.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            if chunked {
+                s.write_all(format!("{:x}\r\n", n).as_bytes())?;
+                s.write_all(&buf[..n])?;
+                s.write_all(b"\r\n")?;
+            } else {
+                s.write_all(&buf[..n])?;
+            }
+        }
+        if chunked {
+            s.write_all(b"0\r\n\r\n")?;
+        }
+        return s.flush();
+    }
     if !head_only {
         if chunked {
             if !resp.body.is_empty() {
@@ -398,7 +421,7 @@ fn handle_conn(stream: TcpStream, handler: Arc<Handler>) {
         };
         let (path, query) = parse_target(&target);
         let req = Request { method, target, path, query, headers, body, ip: peer.clone() };
-        let resp = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(&req))) {
+        let mut resp = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(&req))) {
             Ok(r) => r,
             Err(p) => {
                 let msg = p
@@ -409,7 +432,7 @@ fn handle_conn(stream: TcpStream, handler: Arc<Handler>) {
                 crate::routes::json(500, &crate::obj! { "error" => msg })
             }
         };
-        if write_response(&mut w, &resp, req.method == "HEAD", keep_alive, http10).is_err() || !keep_alive {
+        if write_response(&mut w, &mut resp, req.method == "HEAD", keep_alive, http10).is_err() || !keep_alive {
             return;
         }
     }
