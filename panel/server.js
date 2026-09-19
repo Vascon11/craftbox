@@ -112,7 +112,7 @@ function readInstanceMeta(dir) { try { return JSON.parse(fs.readFileSync(instanc
 function writeInstanceMeta(dir, meta) { try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(instanceMetaPath(dir), JSON.stringify(meta, null, 2)); } catch {} }
 function listInstanceIds() {
   if (!multiEnabled()) return ['default'];
-  try { return fs.readdirSync(CONFIG.serversDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort(); }
+  try { return fs.readdirSync(CONFIG.serversDir, { withFileTypes: true }).filter(d => d.isDirectory() && !d.name.startsWith('.')).map(d => d.name).sort(); }
   catch { return []; }
 }
 function serverCtx(id) {
@@ -1467,7 +1467,7 @@ async function createFromCurseForge({ name, projectId, fileId }) {
       const found = await modrinthBySha1(blocked.map(b => b.sha1).filter(Boolean));
       for (const b of blocked) {
         if (b.sha1 && found[b.sha1]) jobs.push({ ...b, url: found[b.sha1] });
-        else manualMods.push({ file: b.fileName, folder: path.relative(dir, path.dirname(b.dest)), url: b.page });
+        else manualMods.push({ file: b.fileName, folder: path.relative(dir, path.dirname(b.dest)), url: b.page, sha1: b.sha1 || undefined });
       }
     }
     setPhase('Baixando os mods…', { total: jobs.length, done: 0 });
@@ -1768,6 +1768,45 @@ function readBody(req) {
     req.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { resolve({}); } });
   });
 }
+// corpo cru (upload de mod bloqueado): até 256 MB, os .jar passam fácil de 1 MB
+function readRaw(req, max = 256 * 1024 * 1024) {
+  return new Promise((resolve) => {
+    const parts = []; let n = 0;
+    req.on('data', c => { n += c.length; if (n > max) req.destroy(); else parts.push(c); });
+    req.on('end', () => resolve(Buffer.concat(parts)));
+  });
+}
+// Recebe um dos mods que o autor bloqueou pra download automático. Casa pelo
+// SHA-1 (o arquivo baixado pode vir renomeado com "(1)"); sem hash registrado,
+// pelo nome. Grava na pasta esperada e tira da lista manualMods do meta.
+function manualModUpload(dir, name, data) {
+  const meta = readInstanceMeta(dir);
+  const list = Array.isArray(meta.manualMods) ? meta.manualMods : [];
+  if (!list.length) return { code: 400, error: 'esse servidor não tem mods pendentes' };
+  if (!data.length) return { code: 400, error: 'arquivo vazio' };
+  const hash = crypto.createHash('sha1').update(data).digest('hex');
+  const base = path.basename(name || '');
+  const str = v => (v == null ? '' : String(v));
+  let idx = list.findIndex(e => str(e.sha1) === hash);
+  if (idx < 0) {
+    const i = list.findIndex(e => str(e.file) === base);
+    if (i < 0) return { code: 400, error: `${base} não é nenhum dos mods pendentes deste servidor` };
+    if (str(list[i].sha1)) return { code: 400, error: `${base}: o conteúdo não bate com a versão que o modpack pede (baixe pelo link da lista)` };
+    idx = i;
+  }
+  const file = str(list[idx].file), folder = str(list[idx].folder);
+  if (!file || file.includes('/') || file.includes('..') || folder.includes('..') || folder.startsWith('/'))
+    return { code: 400, error: 'entrada inválida no meta' };
+  const destDir = path.join(dir, folder), dest = path.join(destDir, file), tmp = dest + '.part';
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(tmp, data); fs.renameSync(tmp, dest);
+  } catch (e) { try { fs.unlinkSync(tmp); } catch {} return { code: 500, error: e.message }; }
+  const rest = list.filter((_, i) => i !== idx);
+  if (rest.length) meta.manualMods = rest; else delete meta.manualMods;
+  writeInstanceMeta(dir, meta);
+  return { code: 200, file, rest };
+}
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 function serveStatic(res, file) {
   const full = path.join(PUBLIC, file);
@@ -1947,6 +1986,12 @@ const server = http.createServer((req, res) => {
           audit('mod-install', `${slug} → ${SRV().name}`);
           return json(res, 200, { ok: true, installed });
         } catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      if (p === '/api/modpacks/manual-upload' && req.method === 'POST') {
+        const r = manualModUpload(SRV().dir, url.searchParams.get('name') || '', await readRaw(req));
+        if (r.code !== 200) return json(res, r.code, { error: r.error });
+        audit('mod-manual', `${r.file} → ${SRV().name}`);
+        return json(res, 200, { ok: true, file: r.file, manualMods: r.rest });
       }
       if (p === '/api/content/toggle' && req.method === 'POST') {
         const { file, enabled } = await readBody(req);

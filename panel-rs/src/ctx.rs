@@ -56,6 +56,9 @@ pub fn list_instance_ids(cfg: &Map) -> Vec<String> {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
             .map(|e| e.file_name().to_string_lossy().into_owned())
+            // pastas ocultas não são instâncias: o serversDir costuma ser o HOME
+            // do usuário minecraft, e o Java cria ali o `.cache/JNA`
+            .filter(|n| !n.starts_with('.'))
             .collect(),
         Err(_) => Vec::new(),
     };

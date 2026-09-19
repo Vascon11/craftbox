@@ -17,6 +17,17 @@ use std::time::Duration;
 const MAX_HEADER: usize = 16 * 1024;
 /// o readBody do Node destrói a conexão depois de ~1e6 caracteres
 pub const MAX_BODY: usize = 1_000_000;
+/// Upload de mod bloqueado (corpo cru): os .jar passam fácil de 1 MB.
+pub const MAX_UPLOAD: usize = 256 * 1024 * 1024;
+pub const UPLOAD_PATH: &str = "/api/modpacks/manual-upload";
+
+/// Quem pode mandar corpo acima de MAX_BODY: o main registra a checagem de
+/// sessão (recebe o cabeçalho Cookie) pra ninguém sem login encher a RAM.
+static UPLOAD_AUTH: std::sync::OnceLock<Box<dyn Fn(&str) -> bool + Send + Sync>> = std::sync::OnceLock::new();
+
+pub fn set_upload_auth(f: impl Fn(&str) -> bool + Send + Sync + 'static) {
+    let _ = UPLOAD_AUTH.set(Box::new(f));
+}
 const MAX_CONNS: usize = 256;
 const KEEPALIVE: Duration = Duration::from_secs(5);
 const HEADERS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -254,7 +265,7 @@ fn read_head(r: &mut BufReader<TcpStream>) -> Result<Vec<String>, ReadErr> {
     }
 }
 
-fn read_chunked(r: &mut BufReader<TcpStream>) -> Result<Vec<u8>, ReadErr> {
+fn read_chunked(r: &mut BufReader<TcpStream>, max: usize) -> Result<Vec<u8>, ReadErr> {
     let mut body = Vec::new();
     loop {
         let mut line = String::new();
@@ -270,7 +281,7 @@ fn read_chunked(r: &mut BufReader<TcpStream>) -> Result<Vec<u8>, ReadErr> {
                 }
             }
         }
-        if body.len() + size > MAX_BODY {
+        if body.len() + size > max {
             return Err(ReadErr::TooLarge);
         }
         let start = body.len();
@@ -400,15 +411,20 @@ fn handle_conn(stream: TcpStream, handler: Arc<Handler>) {
         if hget("expect").is_some_and(|e| e == "100-continue") {
             let _ = w.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
         }
+        let big_ok = target.split('?').next() == Some(UPLOAD_PATH) && {
+            let ck = headers.iter().find(|(k, _)| k == "cookie").map(|(_, v)| v.as_str()).unwrap_or("");
+            UPLOAD_AUTH.get().is_some_and(|f| f(ck))
+        };
+        let max = if big_ok { MAX_UPLOAD } else { MAX_BODY };
         let body = if hget("transfer-encoding").is_some_and(|t| t.contains("chunked")) {
-            match read_chunked(&mut r) {
+            match read_chunked(&mut r, max) {
                 Ok(b) => b,
                 Err(ReadErr::Bad(c)) => return simple_error(&mut w, c),
                 Err(_) => return,
             }
         } else if let Some(cl) = hget("content-length") {
             let Ok(n) = cl.trim().parse::<usize>() else { return simple_error(&mut w, 400) };
-            if n > MAX_BODY {
+            if n > max {
                 return; // Node: req.destroy() → conexão cai sem resposta
             }
             let mut b = vec![0u8; n];

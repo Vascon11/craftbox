@@ -194,6 +194,8 @@ fn main() {
         });
     }
 
+    let auth_state = st.clone();
+    http::set_upload_auth(move |cookie| auth::is_authed(&auth_state.cfg(), cookie));
     let handler_state = st.clone();
     http::serve(listener, Arc::new(move |req: &http::Request| routes::handle(&handler_state, req)));
 }

@@ -361,6 +361,53 @@ fn finish_pack_instance(
     }
 }
 
+/// `manualModUpload(dir, name, data)`: recebe um dos mods que o autor bloqueou
+/// pra download automático. Casa pelo SHA-1 (o nome do arquivo baixado pode
+/// vir com "(1)" etc.); sem hash registrado, casa pelo nome. Grava na pasta
+/// esperada e tira da lista `manualMods` do meta. Retorna (arquivo, restantes).
+pub fn manual_mod_upload(dir: &str, name: &str, data: &[u8]) -> Result<(String, Vec<Value>), (u16, String)> {
+    let mut meta = ctx::read_instance_meta(dir);
+    let list = meta.get("manualMods").and_then(|v| v.as_arr()).cloned().unwrap_or_default();
+    if list.is_empty() {
+        return Err((400, "esse servidor não tem mods pendentes".into()));
+    }
+    if data.is_empty() {
+        return Err((400, "arquivo vazio".into()));
+    }
+    let hash = crate::crypto::hex(ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, data).as_ref());
+    let base = jsutil::path_basename(name);
+    let s = |e: &Value, k: &str| jsutil::to_string_or_empty(e.get(k));
+    let idx = match list.iter().position(|e| s(e, "sha1") == hash) {
+        Some(i) => i,
+        None => match list.iter().position(|e| s(e, "file") == base) {
+            Some(i) if s(&list[i], "sha1").is_empty() => i,
+            Some(_) => return Err((400, format!("{}: o conteúdo não bate com a versão que o modpack pede (baixe pelo link da lista)", base))),
+            None => return Err((400, format!("{} não é nenhum dos mods pendentes deste servidor", base))),
+        },
+    };
+    let e = &list[idx];
+    let (file, folder) = (s(e, "file"), s(e, "folder"));
+    if file.is_empty() || file.contains('/') || file.contains("..") || folder.contains("..") || folder.starts_with('/') {
+        return Err((400, "entrada inválida no meta".into()));
+    }
+    let dest_dir = jsutil::path_join(&[dir, &folder]);
+    std::fs::create_dir_all(&dest_dir).map_err(|e| (500, e.to_string()))?;
+    let dest = jsutil::path_join(&[&dest_dir, &file]);
+    let tmp = format!("{}.part", dest);
+    std::fs::write(&tmp, data).and_then(|_| std::fs::rename(&tmp, &dest)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        (500, e.to_string())
+    })?;
+    let rest: Vec<Value> = list.iter().enumerate().filter(|(i, _)| *i != idx).map(|(_, v)| v.clone()).collect();
+    if rest.is_empty() {
+        meta.remove("manualMods");
+    } else {
+        meta.insert("manualMods", Value::Arr(rest.clone()));
+    }
+    ctx::write_instance_meta(dir, &meta);
+    Ok((file, rest))
+}
+
 // ---------------------------------------------------------------------------
 // CurseForge (API v1 — exige chave gratuita do console.curseforge.com)
 // ---------------------------------------------------------------------------
@@ -701,7 +748,11 @@ pub fn create_from_curseforge(st: &State, cfg: &Map, name: &str, project_id: &st
                     None => {
                         let folder = jsutil::path_dirname(&b.dest);
                         let rel = folder.strip_prefix(&format!("{}/", dir)).unwrap_or(&folder).to_string();
-                        manual.push(obj! { "file" => b.file_name, "folder" => rel, "url" => b.page });
+                        let mut e = obj! { "file" => b.file_name, "folder" => rel, "url" => b.page };
+                        if let (Value::Obj(m), Some(h)) = (&mut e, b.sha1) {
+                            m.insert("sha1", Value::from(h));
+                        }
+                        manual.push(e);
                     }
                 }
             }

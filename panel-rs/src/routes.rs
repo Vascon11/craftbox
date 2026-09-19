@@ -454,6 +454,16 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
             Err(e) => err(502, &e),
         });
     }
+    if p == "/api/modpacks/manual-upload" && m == "POST" {
+        let name = req.query_get("name").unwrap_or_default();
+        return Ok(match modpacks::manual_mod_upload(&s.dir, &name, &req.body) {
+            Ok((file, rest)) => {
+                audit::audit(cfg, &who, "mod-manual", &format!("{} → {}", file, s.name_str()));
+                json(200, &obj! { "ok" => true, "file" => file, "manualMods" => rest })
+            }
+            Err((code, e)) => err(code, &e),
+        });
+    }
     if p == "/api/content/toggle" && m == "POST" {
         let b = read_body(req);
         let file = destr(&b, "file")?;

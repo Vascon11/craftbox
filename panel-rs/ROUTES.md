@@ -180,6 +180,7 @@ MIME (sensível a maiúsculas, via `path.extname`): `.html` `text/html; charset=
 | * | `/api/modpacks/versions` | `?source&slug` (CurseForge: `slug` = id do projeto) | `{versions:[{id,name,versionNumber,gameVersions,loaders,datePublished,versionType,url}]}`; `400`; `502` | HTTPS | **FEITA** |
 | GET | `/api/servers/create-progress` | — | `{name, phase, done, total, startedAt, at}` ou `{phase:null}` | estado global em memória (1 instalação por vez) | **FEITA** |
 | POST | `/api/servers/create-modpack` | `{name?, slug, versionId?, source?}` | `{ok, server:{id,name,loader,mcVersion,port,modpack,strippedMods,manualMods}}`; `400 {error:"modpack não informado"}`; `409` (já tem instalação em andamento); `502` | **leva minutos**: baixa `.mrpack` para `os.tmpdir()`, `unzip` + `chmod`, downloads em pool de 6, overrides, desativa mods só de cliente (`unzip -p` do `fabric.mod.json`), instala o loader (Fabric por download; Quilt/Forge/NeoForge rodando o instalador `java`, até 15 min); audit | **FEITA** |
+| POST | `/api/modpacks/manual-upload` | `?server&name`; corpo cru (`application/octet-stream`, até 256 MB — só com sessão válida; sem ela o Rust corta acima de 1 MB e o Node dá `401`) | `{ok, file, manualMods}` (os que faltam); `400 {error}` (sem pendentes / conteúdo de outra versão / não é pendente) | casa pelo SHA-1 (sem hash: pelo nome), grava em `folder/file` via `.part` + rename, tira da lista `manualMods` do meta; audit `mod-manual` | **FEITA** |
 
 ### 6.5 Integrações e rede (Auth)
 

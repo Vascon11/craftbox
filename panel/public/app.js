@@ -110,7 +110,11 @@ async function renderServerManager() {
         <div class="inst-title">${esc(s.name)} ${s.active === 'active' ? '<span class="tag">no ar</span>' : ''} ${s.selected ? '<span class="tag">selecionado</span>' : ''}</div>
         <div class="muted small">${esc(s.loader)}${s.mcVersion ? ' ' + esc(s.mcVersion) : ''} · porta ${s.port || '?'} · id <code>${esc(s.id)}</code></div>
         ${mp ? `<div class="muted small" style="margin-top:.25rem">📦 modpack: <a href="${esc(mp.url)}" target="_blank" rel="noopener">${esc(mp.name)}</a> v${esc(mp.version)} — <b>jogadores instalam este pack no cliente</b> <button class="ghost sm btn-copy" data-url="${esc(mp.url)}">copiar link</button></div>` : ''}
-        ${(s.manualMods || []).length ? `<details class="small" style="margin-top:.35rem"><summary class="err">⚠ ${s.manualMods.length} mod(s) bloqueados pelo autor pra download automático — baixe e coloque na pasta indicada</summary><ul style="margin:.3rem 0 0 1rem">${s.manualMods.map(m => `<li><a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.file)}</a> → <code>${esc(m.folder)}/</code></li>`).join('')}</ul></details>` : ''}
+        ${(s.manualMods || []).length ? `<details class="small" style="margin-top:.35rem"><summary class="err">⚠ ${s.manualMods.length} mod(s) bloqueados pelo autor pra download automático — baixe e envie aqui</summary>
+          <ol style="margin:.3rem 0 .4rem 1.2rem">${s.manualMods.map(m => `<li><a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.file)}</a> <span class="muted">→ ${esc(m.folder)}/</span></li>`).join('')}</ol>
+          <div class="muted" style="margin-bottom:.35rem">1. Clique em cada link e baixe o arquivo (botão Download na página do CurseForge). 2. Envie todos de uma vez abaixo — o painel reconhece cada um pelo conteúdo e põe na pasta certa.</div>
+          <label class="ghost sm" style="display:inline-block;cursor:pointer;border:1px solid var(--border,#444);border-radius:6px;padding:.25rem .6rem">📤 Enviar arquivos baixados<input type="file" class="mm-up" multiple accept=".jar,.zip" hidden></label>
+          <span class="mm-status muted"></span></details>` : ''}
       </div>
       <div class="inst-actions">
         <button class="ghost sm btn-clone">Clonar</button>
@@ -118,6 +122,23 @@ async function renderServerManager() {
       </div>`;
     const cp = el.querySelector('.btn-copy');
     if (cp) cp.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(cp.dataset.url); toast('Link do pack copiado — manda pros jogadores.'); };
+    const up = el.querySelector('.mm-up');
+    if (up) up.onchange = async () => {
+      const st = el.querySelector('.mm-status');
+      let okN = 0; const errs = [];
+      for (const [i, f] of [...up.files].entries()) {
+        st.textContent = ` enviando ${i + 1}/${up.files.length}: ${f.name}…`;
+        try {
+          const r = await fetch(`/api/modpacks/manual-upload?server=${encodeURIComponent(s.id)}&name=${encodeURIComponent(f.name)}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+          let d = {}; try { d = await r.json(); } catch {}
+          if (r.ok) okN++; else errs.push(d.error || `${f.name}: falha (${r.status})`);
+        } catch (e) { errs.push(`${f.name}: ${e.message}`); }
+      }
+      if (okN) toast(`${okN} mod(s) instalado(s).` + (errs.length ? '' : ' Reinicie o servidor pra carregar.'));
+      if (errs.length) toast(errs.join(' · '), 'err');
+      renderServerManager(); loadServers();
+    };
     el.querySelector('.btn-clone').onclick = async () => {
       const nome = await promptDialog('Nome da cópia:', s.name + ' (cópia)'); if (!nome) return;
       const r = await api('/api/servers/clone', { method: 'POST', body: JSON.stringify({ id: s.id, name: nome }) });
