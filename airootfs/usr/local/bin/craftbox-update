@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# =============================================================================
+# craftbox-update — sincroniza uma máquina craftbox já instalada com o GitHub.
+#
+# Baixa o pacote de sistema da release (craftbox-system-<tag>.tar.gz, publicado
+# pelo CI junto com a ISO), confere o sha256 e aplica:
+#   - painel (binário Rust + interface), preservando o config.json
+#   - scripts do craftbox (este updater, bdprochot) e o system.sh
+#   - units do systemd e sudoers (fonte única: /usr/local/lib/craftbox/system.sh)
+#   - pacotes do Arch: pacman -Syu + os que o craftbox precisa (ex.: JDKs novas)
+# Não toca nos servidores (/srv/minecraft) nem os reinicia: units novas valem na
+# próxima vez que cada servidor ligar. Se o painel não subir depois, volta o
+# painel anterior sozinho.
+#
+# Uso:
+#   sudo craftbox-update            pergunta antes de aplicar
+#   sudo craftbox-update --yes      aplica sem perguntar (usado pelo painel)
+#   sudo craftbox-update --check    só diz se há versão nova (--json pro painel)
+#   opções: --force (reaplica a mesma versão)  --sem-pacotes (pula o pacman)
+#           --canal pre|stable      (padrão em /etc/craftbox/update.conf)
+#
+# Instalar numa máquina antiga (rc6 ou antes, que ainda não tem o updater):
+#   curl -fsSL https://raw.githubusercontent.com/Vascon11/craftbox/main/airootfs/usr/local/bin/craftbox-update | sudo bash -s -- --yes
+# =============================================================================
+set -uo pipefail
+
+REPO="Vascon11/craftbox"
+RELEASE_FILE=/etc/craftbox-release
+CONF=/etc/craftbox/update.conf
+LOG=/var/log/craftbox-update.log
+BACKUP_ROOT=/var/backups/craftbox
+PANEL_DIR=/opt/craftbox-panel
+UA="craftbox-update (github.com/$REPO)"
+
+# canal: "pre" pega a release mais nova, inclusive pré-release (rc); "stable" só as estáveis
+CHANNEL=pre
+# CB_RELEASES_URL: só pra teste (aponta pra uma lista de releases falsa servida localmente)
+CB_RELEASES_URL=""
+[ -r "$CONF" ] && . "$CONF"
+RELEASES_URL="${CB_RELEASES_URL:-https://api.github.com/repos/$REPO/releases?per_page=20}"
+
+YES=false CHECK=false JSON=false FORCE=false PKGS=true
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes|-y) YES=true ;;
+    --check) CHECK=true ;;
+    --json) JSON=true ;;
+    --force) FORCE=true ;;
+    --sem-pacotes|--no-packages) PKGS=false ;;
+    --canal|--channel) CHANNEL="${2:-pre}"; shift ;;
+    -h|--help) sed -n '2,27p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "opção desconhecida: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+say() { printf '%s\n' "$*"; }
+die() { say "ERRO: $*" >&2; $JSON && jq -n --arg e "$*" '{error:$e}'; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "rode como root (sudo craftbox-update)"
+for c in curl jq tar sha256sum; do command -v "$c" >/dev/null || die "falta o comando $c"; done
+
+current_version() {
+  local v=""
+  [ -r "$RELEASE_FILE" ] && v=$(sed -n 's/^VERSION=//p' "$RELEASE_FILE" | head -1)
+  echo "${v:-desconhecida}"
+}
+
+# release alvo conforme o canal: JSON da release (tag, data, assets)
+fetch_release() {
+  local all
+  all=$(curl -fsSL -A "$UA" -H 'Accept: application/vnd.github+json' \
+        "$RELEASES_URL") || return 1
+  if [ "$CHANNEL" = stable ]; then
+    jq -c '[.[] | select(.draft|not) | select(.prerelease|not)][0] // empty' <<<"$all"
+  else
+    jq -c '[.[] | select(.draft|not)][0] // empty' <<<"$all"
+  fi
+}
+
+CUR=$(current_version)
+REL=$(fetch_release) || die "não consegui falar com o GitHub (sem internet?)"
+[ -n "$REL" ] || die "nenhuma release no canal '$CHANNEL' em github.com/$REPO"
+TAG=$(jq -r .tag_name <<<"$REL")
+ASSET="craftbox-system-$TAG.tar.gz"
+URL=$(jq -r --arg n "$ASSET" '.assets[] | select(.name==$n) | .browser_download_url' <<<"$REL")
+SUM_URL=$(jq -r --arg n "$ASSET.sha256" '.assets[] | select(.name==$n) | .browser_download_url' <<<"$REL")
+UPDATE=false; [ "$TAG" != "$CUR" ] && UPDATE=true
+
+if $CHECK; then
+  if $JSON; then
+    jq -n --arg cur "$CUR" --arg tag "$TAG" --arg ch "$CHANNEL" --argjson up "$UPDATE" \
+      --arg url "$(jq -r .html_url <<<"$REL")" --arg date "$(jq -r .published_at <<<"$REL")" \
+      --argjson pre "$(jq .prerelease <<<"$REL")" --argjson pkg "$([ -n "$URL" ] && echo true || echo false)" \
+      '{current:$cur, latest:$tag, update:$up, channel:$ch, prerelease:$pre, published:$date, url:$url, hasPackage:$pkg}'
+  else
+    say "instalada: $CUR   ·   mais nova ($CHANNEL): $TAG"
+    $UPDATE && say "há atualização: sudo craftbox-update" || say "já está na versão mais nova"
+    [ -n "$URL" ] || say "aviso: a release $TAG não tem o pacote $ASSET (foi gerada antes do updater existir)"
+  fi
+  exit 0
+fi
+
+# ---- daqui pra baixo aplica: um de cada vez, tudo registrado no log ----
+exec 9>/run/craftbox-update.lock
+flock -n 9 || die "já tem uma atualização rodando"
+touch "$LOG" && chmod 644 "$LOG"
+exec > >(tee -a "$LOG") 2>&1
+say ""
+say "=== craftbox-update $(date '+%F %T') — $CUR → $TAG (canal $CHANNEL) ==="
+
+APPLY=false; { $UPDATE || $FORCE; } && APPLY=true
+if ! $APPLY; then
+  say "já está na versão mais nova ($TAG). Use --force pra reaplicar."
+  if $PKGS; then say "(atualizando só os pacotes do sistema)"; else exit 0; fi
+else
+  [ -n "$URL" ] || die "a release $TAG não tem o pacote $ASSET (só releases geradas depois do updater têm)"
+fi
+
+if ! $YES; then
+  if $APPLY; then q="Atualizar o craftbox de $CUR para $TAG?"; else q="Atualizar os pacotes do sistema?"; fi
+  read -r -p "$q [s/N] " r </dev/tty || r=n
+  [[ "$r" =~ ^[sSyY] ]] || { say "cancelado"; exit 0; }
+fi
+
+WORK=$(mktemp -d /tmp/craftbox-update.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+if $APPLY; then
+  say "[1/5] baixando $ASSET"
+  curl -fL --retry 3 -sS -A "$UA" -o "$WORK/$ASSET" "$URL" || die "download falhou"
+  if [ -n "$SUM_URL" ]; then
+    curl -fsSL -A "$UA" -o "$WORK/sum" "$SUM_URL" || die "não consegui baixar o sha256"
+    [ "$(awk '{print $1}' "$WORK/sum")" = "$(sha256sum "$WORK/$ASSET" | awk '{print $1}')" ] \
+      || die "sha256 não confere — pacote corrompido ou adulterado, nada foi alterado"
+    say "      sha256 ok"
+  else
+    die "a release não tem o $ASSET.sha256; sem ele não aplico"
+  fi
+  mkdir -p "$WORK/new" && tar -xzf "$WORK/$ASSET" -C "$WORK/new" || die "pacote inválido"
+  [ -x "$WORK/new/opt/craftbox-panel/craftbox-panel" ] || die "pacote sem o binário do painel"
+
+  say "[2/5] backup do painel atual em $BACKUP_ROOT/$CUR"
+  BK="$BACKUP_ROOT/$CUR"
+  rm -rf "$BK" && mkdir -p "$BK"
+  [ -d "$PANEL_DIR" ] && cp -a "$PANEL_DIR" "$BK/craftbox-panel"
+  cp -a /etc/systemd/system/minecraft@.service /etc/sudoers.d/craftbox-panel "$BK/" 2>/dev/null
+  # guarda só os 3 backups mais recentes
+  ls -1dt "$BACKUP_ROOT"/*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+
+  say "[3/5] aplicando arquivos"
+  N="$WORK/new"
+  mkdir -p "$PANEL_DIR"
+  # interface: troca inteira (arquivos removidos na versão nova somem); config.json fica
+  rm -rf "$PANEL_DIR/public" && cp -a "$N/opt/craftbox-panel/public" "$PANEL_DIR/public"
+  find "$N/opt/craftbox-panel" -maxdepth 1 -type f ! -name config.json ! -name craftbox-panel \
+    -exec cp -f {} "$PANEL_DIR/" \;
+  # binário e scripts: copia pra um temporário e troca com mv (novo inode: o
+  # processo que está rodando — inclusive este script — não é corrompido)
+  install -m755 "$N/opt/craftbox-panel/craftbox-panel" "$PANEL_DIR/.craftbox-panel.new"
+  mv -f "$PANEL_DIR/.craftbox-panel.new" "$PANEL_DIR/craftbox-panel"
+  for f in usr/local/bin/craftbox-update usr/local/bin/craftbox-bdprochot usr/local/lib/craftbox/system.sh; do
+    [ -f "$N/$f" ] || continue
+    install -Dm755 "$N/$f" "/$f.new" && mv -f "/$f.new" "/$f"
+  done
+  [ -f "$N/etc/systemd/system/craftbox-bdprochot.service" ] && \
+    install -Dm644 "$N/etc/systemd/system/craftbox-bdprochot.service" /etc/systemd/system/craftbox-bdprochot.service
+  chown -R minecraft:minecraft "$PANEL_DIR" 2>/dev/null
+  [ -f "$PANEL_DIR/config.json" ] && chmod 600 "$PANEL_DIR/config.json"
+
+  # units e sudoers vêm do system.sh que acabou de chegar
+  # shellcheck source=/dev/null
+  export CB_ROOT=""; . /usr/local/lib/craftbox/system.sh || die "system.sh inválido"
+  cb_write_units
+  cb_write_sudoers || say "      aviso: sudoers não atualizado (visudo recusou)"
+  systemctl daemon-reload
+  mkdir -p "$(dirname "$RELEASE_FILE")"
+  printf 'VERSION=%s\nUPDATED=%s\n' "$TAG" "$(date -Is)" > "$RELEASE_FILE"
+  say "      painel, scripts, units e sudoers atualizados"
+else
+  # shellcheck source=/dev/null
+  export CB_ROOT=""; . /usr/local/lib/craftbox/system.sh 2>/dev/null || true
+fi
+
+REBOOT=false
+if $PKGS; then
+  say "[4/5] pacotes do sistema (pacman -Syu)"
+  if pacman -Syu --noconfirm --needed "${CB_PACKAGES[@]}"; then
+    declare -F cb_java_default_newest >/dev/null && cb_java_default_newest
+    # kernel novo instalado ≠ kernel rodando → precisa reiniciar pra valer
+    kpkg=$(pacman -Q linux 2>/dev/null | awk '{print $2}' | sed 's/\.arch/-arch/')
+    [ -n "$kpkg" ] && [[ "$(uname -r)" != "$kpkg"* ]] && REBOOT=true
+  else
+    say "      aviso: o pacman falhou (espelho fora do ar?). O craftbox foi atualizado mesmo assim; rode de novo depois."
+  fi
+else
+  say "[4/5] pacotes do sistema: pulado (--sem-pacotes)"
+fi
+
+say "[5/5] reiniciando o painel"
+if systemctl is-enabled craftbox-panel >/dev/null 2>&1 || systemctl is-active craftbox-panel >/dev/null 2>&1; then
+  systemctl restart craftbox-panel
+  port=$(jq -r '.port // 8080' "$PANEL_DIR/config.json" 2>/dev/null || echo 8080)
+  ok=false
+  for _ in $(seq 1 20); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/authcheck" || true)
+    [[ "$code" =~ ^(200|401)$ ]] && { ok=true; break; }
+    sleep 1
+  done
+  if ! $ok && [ -n "${BK:-}" ] && [ -x "$BK/craftbox-panel/craftbox-panel" ]; then
+    say "      o painel novo não respondeu — voltando o anterior ($CUR)"
+    install -m755 "$BK/craftbox-panel/craftbox-panel" "$PANEL_DIR/.craftbox-panel.new" && mv -f "$PANEL_DIR/.craftbox-panel.new" "$PANEL_DIR/craftbox-panel"
+    rm -rf "$PANEL_DIR/public" && cp -a "$BK/craftbox-panel/public" "$PANEL_DIR/public"
+    printf 'VERSION=%s\nUPDATED=%s\n' "$CUR" "$(date -Is)" > "$RELEASE_FILE"
+    systemctl restart craftbox-panel
+    die "atualização desfeita: o painel $TAG não subiu (veja: journalctl -u craftbox-panel)"
+  fi
+  $ok && say "      painel no ar"
+fi
+
+say ""
+say "✓ craftbox em $TAG."
+say "  Os servidores Minecraft não foram reiniciados: as mudanças de unit valem quando cada um ligar de novo."
+$REBOOT && say "  ⚠ Kernel atualizado: reinicie a máquina quando der (sudo reboot)."
+say "=== fim $(date '+%F %T') ==="

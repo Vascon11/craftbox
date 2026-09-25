@@ -19,11 +19,13 @@ const MAX_HEADER: usize = 16 * 1024;
 pub const MAX_BODY: usize = 1_000_000;
 /// Upload de mod bloqueado (corpo cru): os .jar passam fácil de 1 MB.
 pub const MAX_UPLOAD: usize = 256 * 1024 * 1024;
-pub const UPLOAD_PATH: &str = "/api/modpacks/manual-upload";
+/// rotas que recebem arquivo cru (mods) e por isso podem passar de MAX_BODY
+pub const UPLOAD_PATHS: &[&str] = &["/api/modpacks/manual-upload", "/api/content/upload"];
 
 /// Quem pode mandar corpo acima de MAX_BODY: o main registra a checagem de
 /// sessão (recebe o cabeçalho Cookie) pra ninguém sem login encher a RAM.
-static UPLOAD_AUTH: std::sync::OnceLock<Box<dyn Fn(&str) -> bool + Send + Sync>> = std::sync::OnceLock::new();
+type UploadAuth = Box<dyn Fn(&str) -> bool + Send + Sync>;
+static UPLOAD_AUTH: std::sync::OnceLock<UploadAuth> = std::sync::OnceLock::new();
 
 pub fn set_upload_auth(f: impl Fn(&str) -> bool + Send + Sync + 'static) {
     let _ = UPLOAD_AUTH.set(Box::new(f));
@@ -411,7 +413,7 @@ fn handle_conn(stream: TcpStream, handler: Arc<Handler>) {
         if hget("expect").is_some_and(|e| e == "100-continue") {
             let _ = w.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
         }
-        let big_ok = target.split('?').next() == Some(UPLOAD_PATH) && {
+        let big_ok = target.split('?').next().is_some_and(|p| UPLOAD_PATHS.contains(&p)) && {
             let ck = headers.iter().find(|(k, _)| k == "cookie").map(|(_, v)| v.as_str()).unwrap_or("");
             UPLOAD_AUTH.get().is_some_and(|f| f(ck))
         };

@@ -131,6 +131,9 @@ fn server_action_route(p: &str) -> Option<(&str, &str)> {
 // Handler
 // ---------------------------------------------------------------------------
 pub fn handle(st: &State, req: &Request) -> Response {
+    if req.path == "/mcp" {
+        return crate::mcp::handle(st, req);
+    }
     let cfg = st.cfg();
     let cookie = req.header("cookie").unwrap_or_default();
     let srv = ctx::server_ctx(&cfg, &ctx::current_id(&cfg, req.query_get("server").as_deref()));
@@ -172,13 +175,66 @@ fn mtime_ms(m: &std::fs::Metadata) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Sonda de 2 s: servidor travado não pode segurar o /api/status.
 fn players_of(cfg: &Map, s: &Srv) -> Value {
-    if let Ok(list) = rcon::command(cfg, s, "list") {
+    if let Ok(list) = rcon::command_timeout(cfg, s, "list", Duration::from_secs(2)) {
         if let Some((online, max)) = rcon::parse_players(&list) {
             return obj! { "online" => online, "max" => max };
         }
     }
     Value::Null
+}
+
+const UPDATER: &str = "/usr/local/bin/craftbox-update";
+const UPDATE_LOG: &str = "/var/log/craftbox-update.log";
+
+/// `systemctl is-active craftbox-update` (a unidade transitória do systemd-run)
+fn update_running() -> bool {
+    let r = runner::run("systemctl", &["is-active", "craftbox-update"], runner::RUN_TIMEOUT);
+    matches!(jsutil::trim(&r.stdout), "active" | "activating")
+}
+
+/// Depois disso sem o RCON responder, "iniciando" vira "sem resposta".
+const STALL_SECS: f64 = 15.0 * 60.0;
+
+/// Estado de verdade do servidor. O systemd diz `active` assim que o start.sh
+/// roda, mas o Minecraft só aceita jogadores depois do "Done", que é quando o
+/// RCON sobe. Então `active` só vale com o RCON respondendo; antes disso é
+/// `activating`, e se passar de STALL_SECS vira `stalled` (travado, em geral
+/// swap). Sem RCON habilitado, cai no "Done (" do logs/latest.log.
+fn live_state(exec: bool, cfg: &Map, s: &Srv) -> (String, Value, Option<f64>) {
+    let active = runner::svc_active_of(exec, cfg, &s.service);
+    let uptime = runner::svc_uptime(exec, cfg, &s.service);
+    if active != "active" {
+        return (active, Value::Null, uptime);
+    }
+    let players = players_of(cfg, s);
+    if !matches!(players, Value::Null) {
+        return (active, players, uptime);
+    }
+    let rcon_off = ctx::read_props(&s.dir).get("enable-rcon").and_then(|v| v.as_str()) == Some("false");
+    if rcon_off {
+        let log = jsutil::path_join(&[&s.dir, "logs", "latest.log"]);
+        let fresh = std::fs::metadata(&log)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .map(|age| uptime.is_none_or(|u| age.as_secs_f64() <= u + 5.0))
+            .unwrap_or(false);
+        let done = fresh && std::fs::read(&log).map(|b| String::from_utf8_lossy(&b).contains("Done (")).unwrap_or(false);
+        return (if done { active } else { "activating".into() }, Value::Null, uptime);
+    }
+    let st = if uptime.is_some_and(|u| u > STALL_SECS) { "stalled" } else { "activating" };
+    (st.into(), Value::Null, uptime)
+}
+
+/// Desligar: com o servidor respondendo, manda `stop` pelo RCON (o log mostra o
+/// salvamento e a JVM sai com 0); senão (subindo/travado) cai no systemctl stop.
+fn graceful_stop(exec: bool, cfg: &Map, s: &Srv) -> runner::RunResult {
+    if runner::svc_active_of(exec, cfg, &s.service) == "active" && rcon::command(cfg, s, "stop").is_ok() {
+        return runner::RunResult::ok();
+    }
+    runner::svc_stop_nowait(exec, cfg, &s.service, false)
 }
 
 fn run_json(code_ok: bool, output: String) -> Response {
@@ -241,9 +297,7 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
 
     // ================= painel e servidor =================
     if p == "/api/status" {
-        let active = runner::svc_active_of(exec, cfg, &s.service);
-        let players = if active == "active" { players_of(cfg, s) } else { Value::Null };
-        let uptime = runner::svc_uptime(exec, cfg, &s.service);
+        let (active, players, uptime) = live_state(exec, cfg, s);
         return Ok(json(
             200,
             &obj! { "active" => active, "uptime" => uptime, "players" => players, "system" => stats::system_stats(&s.dir) },
@@ -253,7 +307,11 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
         let b = read_body(req);
         let action = destr(&b, "action")?.cloned();
         let a = jsutil::to_string(action.as_ref());
-        let r = runner::svc_action(exec, cfg, if matches!(action, Some(Value::Str(_))) { &a } else { "" }, &s.service)?;
+        let r = if a == "stop" && matches!(action, Some(Value::Str(_))) {
+            graceful_stop(exec, cfg, s)
+        } else {
+            runner::svc_action(exec, cfg, if matches!(action, Some(Value::Str(_))) { &a } else { "" }, &s.service)?
+        };
         audit::audit(cfg, &who, "power", &format!("{} → {}", a, s.name_str()));
         if a == "start" && r.code == 0 {
             intg::maybe_start_tunnels(exec, cfg, s);
@@ -454,6 +512,35 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
             Err(e) => err(502, &e),
         });
     }
+    if p == "/api/content/download-all" && m == "GET" {
+        return Ok(match content::mods_zip(cfg, s) {
+            Ok((file, size, n)) => {
+                audit::audit(cfg, &who, "mods-baixar-zip", &format!("{} mods → {}", n, s.name_str()));
+                let safe: String = s.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+                Response {
+                    status: 200,
+                    headers: vec![
+                        ("Content-Type".into(), "application/zip".into()),
+                        ("Content-Length".into(), size.to_string()),
+                        ("Content-Disposition".into(), format!("attachment; filename=\"{}-mods.zip\"", safe)),
+                    ],
+                    body: Vec::new(),
+                    stream: Some(file),
+                }
+            }
+            Err((code, e)) => err(code, &e),
+        });
+    }
+    if p == "/api/content/upload" && m == "POST" {
+        let name = req.query_get("name").unwrap_or_default();
+        return Ok(match content::upload_content(cfg, s, &name, &req.body) {
+            Ok(v) => {
+                audit::audit(cfg, &who, "mod-enviar", &format!("{} → {}", jsutil::to_string(v.get("file")), s.name_str()));
+                json(200, &v)
+            }
+            Err((code, e)) => err(code, &e),
+        });
+    }
     if p == "/api/modpacks/manual-upload" && m == "POST" {
         let name = req.query_get("name").unwrap_or_default();
         return Ok(match modpacks::manual_mod_upload(&s.dir, &name, &req.body) {
@@ -582,15 +669,13 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
         // B5 corrigido: a auditoria mantém ip/usuário (o Node registrava "-")
         let who = Who { ip: &rc.ip, user: &rc.user, server: &t.id };
         if action == "status" {
-            let active = runner::svc_active_of(exec, cfg, &t.service);
-            let players = if active == "active" { players_of(cfg, &t) } else { Value::Null };
-            let uptime = runner::svc_uptime(exec, cfg, &t.service);
+            let (active, players, uptime) = live_state(exec, cfg, &t);
             return Ok(json(
                 200,
                 &obj! { "id" => id, "name" => t.name.clone(), "active" => active, "uptime" => uptime, "players" => players },
             ));
         }
-        let r = runner::svc_action(exec, cfg, action, &t.service)?;
+        let r = if action == "stop" { graceful_stop(exec, cfg, &t) } else { runner::svc_action(exec, cfg, action, &t.service)? };
         let verb = match action {
             "start" => "ligar",
             "stop" => "desligar",
@@ -601,6 +686,37 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
             intg::maybe_start_tunnels(exec, cfg, &t);
         }
         return Ok(run_json(r.code == 0, r.output()));
+    }
+    if p == "/api/servers/stop-all" && m == "POST" {
+        let b = read_body(req);
+        let force = truthy(b.get("force"));
+        let mut stopped: Vec<Value> = Vec::new();
+        let mut errors: Vec<Value> = Vec::new();
+        for id in ctx::list_instance_ids(cfg) {
+            let t = ctx::server_ctx(cfg, &id);
+            let a = runner::svc_active_of(exec, cfg, &t.service);
+            if !matches!(a.as_str(), "active" | "activating" | "deactivating" | "reloading") {
+                continue;
+            }
+            // o jeito mais confiável de parar é o `stop` pelo RCON: salva o mundo e sai
+            // com 0 (o Minecraft às vezes ignora o SIGTERM logo depois do "Done").
+            // Sem RCON (subindo/travado) cai no systemctl stop.
+            let r = if force { runner::svc_stop_nowait(exec, cfg, &t.service, true) } else { graceful_stop(exec, cfg, &t) };
+            if r.code == 0 {
+                stopped.push(Value::from(id.as_str()));
+            } else {
+                errors.push(obj! { "id" => id.as_str(), "error" => jsutil::trim(&r.output()) });
+            }
+        }
+        let names: Vec<String> = stopped.iter().map(|v| jsutil::to_string(Some(v))).collect();
+        audit::audit(
+            cfg,
+            &who,
+            if force { "desligar-tudo-forcado" } else { "desligar-tudo" },
+            &if names.is_empty() { "nada rodando".to_string() } else { names.join(", ") },
+        );
+        let ok = errors.is_empty();
+        return Ok(json(if ok { 200 } else { 500 }, &obj! { "ok" => ok, "stopped" => stopped, "errors" => errors, "force" => force }));
     }
     if p == "/api/servers/select" && m == "POST" {
         let b = read_body(req);
@@ -914,7 +1030,74 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
         audit::audit(cfg, &who, "usuario-remover", &name);
         return Ok(json(200, &obj! { "ok" => true }));
     }
+    // ================= conector MCP (tokens) =================
+    if p == "/api/mcp/tokens" {
+        if !auth::is_admin(cfg, auth::session_user(cfg, cookie).as_deref()) {
+            return Ok(err(403, "só um admin pode gerenciar o conector MCP"));
+        }
+        if m == "GET" {
+            return Ok(json(200, &obj! { "tokens" => crate::mcp::tokens_public(cfg) }));
+        }
+        if m == "POST" {
+            let b = read_body(req);
+            let name = jsutil::trim(&jsutil::to_string_or_empty(b.get("name"))).to_string();
+            let name = if name.is_empty() { "Claude".to_string() } else { name.chars().take(40).collect() };
+            let owner = auth::session_user(cfg, cookie).unwrap_or_else(|| "admin".into());
+            let (token, public) = crate::mcp::token_create(st, &name, &owner);
+            audit::audit(cfg, &who, "mcp-token-criar", &name);
+            return Ok(json(200, &obj! { "ok" => true, "token" => token, "entry" => public }));
+        }
+        if m == "DELETE" {
+            let id = req.query_get("id").unwrap_or_default();
+            if !crate::mcp::token_delete(st, &id) {
+                return Ok(err(404, "token não existe"));
+            }
+            audit::audit(cfg, &who, "mcp-token-revogar", &id);
+            return Ok(json(200, &obj! { "ok" => true }));
+        }
+    }
     // ================= auditoria / histórico =================
+    // ================= atualização do sistema (craftbox-update) =================
+    if p == "/api/system/update" && m == "GET" {
+        // o updater só existe no appliance (ISO); no Docker/rootless não há o que atualizar por aqui
+        if exec || config::systemctl_user(cfg) || !std::path::Path::new(UPDATER).exists() {
+            return Ok(json(200, &obj! { "supported" => false, "reason" => "a atualização pelo painel só existe no craftbox instalado pela ISO" }));
+        }
+        let r = runner::run("sudo", &["-n", UPDATER, "--check", "--json"], Duration::from_secs(40));
+        let parsed = json::parse(jsutil::trim(&r.stdout)).ok();
+        return Ok(match parsed {
+            Some(Value::Obj(o)) if r.code == 0 => json(200, &merge(obj! { "supported" => true, "running" => update_running() }, Value::Obj(o))),
+            Some(Value::Obj(o)) => json(502, &Value::Obj(o)),
+            _ => err(502, &format!("não consegui checar: {}", jsutil::trim(&r.output()))),
+        });
+    }
+    if p == "/api/system/update" && m == "POST" {
+        if !auth::is_admin(cfg, auth::session_user(cfg, cookie).as_deref()) {
+            return Ok(err(403, "só um admin pode atualizar o sistema"));
+        }
+        if update_running() {
+            return Ok(err(409, "já tem uma atualização rodando"));
+        }
+        // roda fora do cgroup do painel: no fim o updater reinicia o próprio painel
+        let r = runner::run(
+            "sudo",
+            &["-n", "/usr/bin/systemd-run", "--unit=craftbox-update", "--collect", "--no-block", UPDATER, "--yes"],
+            runner::RUN_TIMEOUT,
+        );
+        if r.code != 0 {
+            return Ok(err(500, &format!("não consegui iniciar a atualização: {}", jsutil::trim(&r.output()))));
+        }
+        audit::audit(cfg, &who, "atualizar-sistema", "craftbox-update iniciado");
+        return Ok(json(200, &obj! { "ok" => true }));
+    }
+    if p == "/api/system/update/log" && m == "GET" {
+        let txt = std::fs::read(UPDATE_LOG).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        // só a última execução (cada uma começa com "=== craftbox-update")
+        let last = txt.rfind("=== craftbox-update").map(|i| &txt[i..]).unwrap_or("");
+        let lines: Vec<&str> = last.lines().collect();
+        let tail = lines[lines.len().saturating_sub(300)..].join("\n");
+        return Ok(json(200, &obj! { "running" => update_running(), "log" => tail }));
+    }
     if p == "/api/audit" && m == "DELETE" {
         let _ = std::fs::write(audit::audit_path(cfg), "");
         audit::audit(cfg, &who, "historico-limpo", "histórico apagado pelo painel");

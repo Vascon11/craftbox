@@ -113,6 +113,7 @@
           </div>
         </div>
         <div id="powerMsg" class="muted small" style="margin:-.4rem 0 1.1rem"></div>
+        <div id="joinBox" class="join-box" hidden></div>
 
         <div class="metrics">
           <div class="metric">
@@ -186,7 +187,10 @@
         <div class="card" style="margin-top:1.4rem">
           <div class="row spread">
             <h3>Servidores</h3>
-            <button id="serversManage" class="ghost sm">⚙ Gerenciar</button>
+            <div class="row" style="gap:.4rem">
+              <button id="serversStopAll" class="danger sm" title="Parada de emergência: desliga todo servidor que estiver rodando">⛔ Desligar tudo</button>
+              <button id="serversManage" class="ghost sm">⚙ Gerenciar</button>
+            </div>
           </div>
           <p class="muted small" style="margin-top:.6rem" id="serversHint">Instâncias disponíveis. Por limitações de hardware, execute apenas um servidor por vez. Clique em "Selecionar" para gerenciar no painel acima.</p>
           <div id="serversGrid" class="store-grid"></div>
@@ -253,7 +257,35 @@
           </form>
           <div id="usersMsg" class="muted small"></div>
         </div>
-        <div class="card">
+        <div class="card" id="updCard" hidden>
+          <div class="row spread">
+            <h3>Atualização do craftbox</h3>
+            <button id="updCheck" class="ghost sm">Verificar</button>
+          </div>
+          <p class="muted small" style="margin-top:.6rem">Sincroniza esta máquina com a versão mais nova publicada no GitHub: painel, scripts, configurações do sistema e pacotes do Arch. Os servidores e mundos não são tocados nem reiniciados.</p>
+          <div id="updInfo" class="small" style="margin:.5rem 0">—</div>
+          <button id="updRun" class="ok" hidden>⬆ Atualizar agora</button>
+          <pre id="updLog" class="small" hidden style="max-height:260px;overflow:auto;white-space:pre-wrap;margin-top:.6rem"></pre>
+        </div>
+        <div class="card" id="mcpCard" hidden>
+          <h3>Conector MCP (Claude)</h3>
+          <p class="muted small" style="margin-top:.6rem">Deixa o <b>Claude Code</b> (ou outro cliente MCP) ligar/desligar servidores, ler logs, rodar comandos, instalar mods e fazer backups por você. Cada token age como <b>você</b> e tudo que ele fizer aparece no histórico com "via MCP". Só funciona na rede de casa ou pelo Tailscale — o painel não fica exposto na internet.</p>
+          <div id="mcpList" style="margin:.7rem 0"></div>
+          <form id="mcpForm" class="content-toolbar">
+            <input type="text" id="mcpName" placeholder="nome do token (ex.: Claude no notebook)" maxlength="40" autocomplete="off">
+            <button type="submit" class="ok">Gerar token</button>
+          </form>
+          <div id="mcpNew" hidden style="margin-top:.7rem">
+            <p class="small"><b>Copie agora</b> — o token não aparece de novo. No terminal onde você usa o Claude Code:</p>
+            <pre id="mcpCmd" class="small" style="white-space:pre-wrap;word-break:break-all;user-select:all;padding:.6rem;border-radius:8px;background:var(--bg2,#0003)"></pre>
+            <div class="row" style="margin:.3rem 0 0"><button id="mcpCopy" class="ghost sm" type="button">Copiar comando</button><span class="muted small">Depois, no Claude Code: <code>/mcp</code> mostra o craftbox conectado.</span></div>
+          </div>
+        </div>
+        <div class="card" id="pumpkinCfgNote" hidden>
+          <h3>Configuração do Pumpkin</h3>
+          <p class="muted small" style="margin-top:.6rem">Este servidor é <b>Pumpkin</b> (experimental, em Rust): ele não usa <code>server.properties</code> nem mods/plugins do Modrinth. A configuração fica em <code>pumpkin.toml</code> e <code>features.toml</code> na pasta do servidor.</p>
+        </div>
+        <div class="card" id="propsCard">
           <div class="row spread">
             <h3>server.properties</h3>
             <div class="row" style="margin:0">
@@ -296,13 +328,17 @@
           <div class="row spread">
             <h3>Instalados</h3>
             <div class="row" style="margin:0">
+              <button id="downloadModsBtn" class="ghost" title="Baixar um .zip com os mods pros seus amigos colocarem na pasta mods" hidden>📦 Baixar mods (.zip)</button>
+              <label class="ghost btn-like" id="uploadModsBtn" title="Enviar arquivos .jar do seu computador (vários de uma vez)">📤 Enviar mods (.jar)<input type="file" id="uploadModsIn" multiple accept=".jar" hidden></label>
               <button id="updateCheck" class="ghost">Verificar atualizações</button>
               <button id="reloadInstalled" class="ghost">Atualizar lista</button>
             </div>
           </div>
           <div id="updMsg" class="muted small" style="margin-top:.5rem"></div>
           <input type="search" id="instFilter" placeholder="filtrar instalados (nome ou slug)…" style="width:100%;margin-top:.6rem">
-          <div id="installedList" style="margin-top:1rem"></div>
+          <div id="uploadMsg" class="muted small" style="margin-top:.4rem"></div>
+          <div id="installedList" class="drop-target" style="margin-top:1rem"></div>
+          <div class="muted small" style="margin-top:.4rem">Dica: dá pra arrastar arquivos <code>.jar</code> direto pra esta lista. Mods novos só carregam depois de reiniciar o servidor.</div>
         </div>
       </section>
 

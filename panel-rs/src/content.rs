@@ -368,6 +368,113 @@ pub fn install_project(
 }
 
 /// lista instalados: cruza o manifesto com os arquivos reais na pasta
+/// `uploadContent(name, data)`: mod/plugin enviado à mão (corpo cru). Só `.jar`
+/// que seja zip de verdade; vai pra `mods/` ou `plugins/` conforme o loader.
+/// Substitui um arquivo de mesmo nome (e tira a cópia `.disabled`, se houver).
+pub fn upload_content(cfg: &Map, s: &Srv, name: &str, data: &[u8]) -> Result<Value, (u16, String)> {
+    let base = jsutil::path_basename(name);
+    if base.is_empty() || base.starts_with('.') || !base.to_lowercase().ends_with(".jar") {
+        return Err((400, format!("{}: só dá pra enviar arquivos .jar", if base.is_empty() { "arquivo" } else { &base })));
+    }
+    if !data.starts_with(b"PK\x03\x04") {
+        return Err((400, format!("{}: não é um .jar válido", base)));
+    }
+    let loader = detect_loader(cfg, s);
+    let folder = content_folder(s, &loader);
+    let dest = jsutil::path_join(&[&folder, &base]);
+    let disabled = format!("{}.disabled", dest);
+    let replaced = std::path::Path::new(&dest).exists() || std::path::Path::new(&disabled).exists();
+    let tmp = format!("{}.part", dest);
+    std::fs::write(&tmp, data).and_then(|_| std::fs::rename(&tmp, &dest)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        (500, e.to_string())
+    })?;
+    let _ = std::fs::remove_file(&disabled);
+    Ok(obj! {
+        "ok" => true, "file" => base, "folder" => if is_mods_like(&loader) { "mods" } else { "plugins" }, "replaced" => replaced,
+    })
+}
+
+/// `modsZip()`: zip com os mods que os jogadores precisam, pra jogar direto
+/// na pasta `mods/` do cliente. Entram os `.jar` ativos e os que o painel
+/// desativou por serem só de cliente (`strippedMods` do meta, voltando a `.jar`);
+/// os desativados à mão ficam de fora. Leva um LEIA-ME.txt com a versão do
+/// Minecraft e do loader. Devolve (arquivo já aberto e desvinculado do disco,
+/// tamanho, quantos mods).
+pub fn mods_zip(cfg: &Map, s: &Srv) -> Result<(std::fs::File, u64, usize), (u16, String)> {
+    let loader = detect_loader(cfg, s);
+    if !is_mods_like(&loader) {
+        return Err((400, "servidor de plugins (Paper/vanilla): os jogadores não precisam de mods".into()));
+    }
+    let folder = content_folder(s, &loader);
+    let meta = crate::ctx::read_instance_meta(&s.dir);
+    let stripped: Vec<String> = meta
+        .get("strippedMods")
+        .and_then(|v| v.as_arr())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let mut files: Vec<(String, String)> = Vec::new(); // (nome no zip, caminho)
+    if let Ok(rd) = std::fs::read_dir(&folder) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.ends_with(".jar") {
+                files.push((n.clone(), jsutil::path_join(&[&folder, &n])));
+            } else if let Some(base) = n.strip_suffix(".disabled") {
+                if base.ends_with(".jar") && stripped.iter().any(|x| x == base) {
+                    files.push((base.to_string(), jsutil::path_join(&[&folder, &n])));
+                }
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err((404, "nenhum mod instalado neste servidor".into()));
+    }
+    files.sort_by_key(|a| a.0.to_lowercase());
+    let mc = detect_mc_version(cfg, s).unwrap_or_else(|| "?".into());
+    let lv = jsutil::to_string_or_empty(meta.get("loaderVersion"));
+    let loader_name = match loader.as_str() {
+        "forge" => "Forge",
+        "neoforge" => "NeoForge",
+        "quilt" => "Quilt",
+        _ => "Fabric",
+    };
+    let mut readme = format!(
+        "Mods do servidor \"{}\" (craftbox)\r\n\r\n\
+Minecraft {mc}  +  {loader_name}{}\r\n{} mods\r\n\r\n\
+Como usar:\r\n \
+1. Crie uma instância Minecraft {mc} com {loader_name}{} (Prism Launcher, CurseForge ou o instalador do {loader_name}).\r\n \
+2. Extraia estes arquivos .jar dentro da pasta \"mods\" da instância (.minecraft/mods).\r\n \
+3. Abra o jogo e entre no servidor. Se aparecer \"mods diferentes\", confira se não sobrou mod antigo na pasta.\r\n",
+        s.name_str(),
+        if lv.is_empty() { String::new() } else { format!(" {}", lv) },
+        files.len(),
+        if lv.is_empty() { String::new() } else { format!(" {}", lv) },
+    );
+    if let Some(mp) = meta.get("modpack").filter(|m| truthy(Some(m))) {
+        readme.push_str(&format!(
+            "\r\nEste servidor usa o modpack {} {}. Dá pra instalar o pack inteiro (com configs, texturas e shaders) por:\r\n{}\r\n",
+            jsutil::to_string_or_empty(mp.get("name")),
+            jsutil::to_string_or_empty(mp.get("version")),
+            jsutil::to_string_or_empty(mp.get("url")),
+        ));
+    }
+    let tmp = std::env::temp_dir().join(format!("craftbox-mods-{}.zip", crate::crypto::random_hex(6)));
+    let tmp_s = tmp.to_string_lossy().into_owned();
+    let res = (|| -> std::io::Result<()> {
+        let mut out = std::fs::File::create(&tmp)?;
+        let mut entries: Vec<(String, crate::zipw::Source)> = vec![("LEIA-ME.txt".into(), crate::zipw::Source::Bytes(readme.as_bytes()))];
+        for (n, p) in &files {
+            entries.push((n.clone(), crate::zipw::Source::Path(p)));
+        }
+        crate::zipw::write_stored(&mut out, &entries)
+    })();
+    let opened = res.and_then(|_| std::fs::File::open(&tmp));
+    let _ = std::fs::remove_file(&tmp_s); // o arquivo aberto continua legível até fechar
+    let f = opened.map_err(|e| (500, format!("não consegui montar o zip: {}", e)))?;
+    let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+    Ok((f, size, files.len()))
+}
+
 pub fn list_installed(cfg: &Map, s: &Srv) -> Value {
     let loader = detect_loader(cfg, s);
     let folder = content_folder(s, &loader);
@@ -490,6 +597,15 @@ pub fn install_player_auth(cfg: &Map, s: &Srv) -> Result<Value, String> {
     let folder = content_folder(s, &loader);
     let mc = detect_mc_version(cfg, s);
     let mut installed: Vec<Value> = Vec::new();
+    // AuthMe é plugin Bukkit e o EasyAuth só existe pra Fabric: em Forge/NeoForge/Quilt
+    // o AuthMe ia parar na pasta mods sem funcionar
+    if !matches!(loader.as_str(), "fabric" | "paper") {
+        return Err(format!(
+            "login de jogadores ainda não tem suporte a servidores {}: só Paper (AuthMe) e Fabric (EasyAuth). \
+             O modo offline sozinho funciona, mas sem senha qualquer um entra com qualquer nick.",
+            loader
+        ));
+    }
     if loader == "fabric" {
         let vers = modrinth_versions("easyauth", &loader, mc.as_deref());
         let v = pick_version(&vers, None).filter(|v| v.compatible).ok_or_else(|| {
@@ -507,11 +623,23 @@ pub fn install_player_auth(cfg: &Map, s: &Srv) -> Result<Value, String> {
             }
         }
     } else {
-        // /^AuthMe.*\.jar$/i
-        let u = gh_latest_asset("AuthMe/AuthMeReloaded", |n| {
-            let l = n.to_ascii_lowercase();
-            l.starts_with("authme") && l.ends_with(".jar")
-        })?;
+        // desde o 6.x a release traz um .jar por plataforma (Paper, Folia, Spigot,
+        // Bungee, Velocity); pegar "o primeiro AuthMe*.jar" trazia o módulo do
+        // BungeeCord, que não carrega no Paper. Ordem: Paper > Spigot > jar único antigo.
+        let pick = |pref: &'static str| {
+            move |n: &str| {
+                let l = n.to_ascii_lowercase();
+                l.starts_with("authme") && l.ends_with(".jar") && l.contains(pref)
+            }
+        };
+        let u = gh_latest_asset("AuthMe/AuthMeReloaded", pick("-paper"))
+            .or_else(|_| gh_latest_asset("AuthMe/AuthMeReloaded", pick("-spigot-1.")))
+            .or_else(|_| {
+                gh_latest_asset("AuthMe/AuthMeReloaded", |n| {
+                    let l = n.to_ascii_lowercase();
+                    l.starts_with("authme") && l.ends_with(".jar") && !["bungee", "velocity", "folia", "legacy"].iter().any(|x| l.contains(x))
+                })
+            })?;
         net::download(&u, &jsutil::path_join(&[&folder, "AuthMeReloaded.jar"]))?;
         installed.push("AuthMeReloaded.jar".into());
     }

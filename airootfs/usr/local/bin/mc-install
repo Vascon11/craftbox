@@ -11,13 +11,16 @@
 #
 set -uo pipefail
 
-CB_VERSION="1.0"
+CB_VERSION=$(sed -n 's/^VERSION=//p' /etc/craftbox-release 2>/dev/null); CB_VERSION=${CB_VERSION:-dev}
 DRYRUN=false
 [ "${1:-}" = "--dry-run" ] && DRYRUN=true
 DIALOG=${DIALOG:-dialog}
 LOG=${CB_LOG:-/tmp/craftbox-install.log}
 STATE=/tmp/craftbox-install.state
 UA="mc-install/$CB_VERSION (github.com/Vascon11/craftbox)"
+# units, sudoers e lista de pacotes: fonte única compartilhada com o craftbox-update
+# shellcheck source=/dev/null
+. /usr/local/lib/craftbox/system.sh
 export LANG=${LANG:-C.UTF-8}
 NL=$'\n'
 
@@ -155,7 +158,14 @@ valid_ip() { valid_cidr "$1/32"; }
 # disco de onde o live bootou (não pode ser o alvo)
 live_disk() { local src; src=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null) || return 0; [ -n "$src" ] && lsblk -no PKNAME "$src" 2>/dev/null | head -1 | sed 's|^|/dev/|'; }
 human_ram() { free -m | awk '/^Mem:/{printf "%.1f GB", $2/1024}'; }
-heap_mb() { local t h; t=$(free -m | awk '/^Mem:/{print $2}'); h=$(( t - 2048 )); (( h < 1024 )) && h=1024; (( h > 6144 )) && h=6144; echo "$h"; }
+# heap do 1º servidor: RAM - 2 GB (até 6 GB). Com ≤4,5 GB isso deixava o SO + painel
+# sem folga e a máquina entrava em swap thrashing no HD (achado no Dell de 4 GB),
+# então aí fica em 35% da RAM (mín. 1 GB).
+heap_mb() {
+  local t h; t=$(free -m | awk '/^Mem:/{print $2}')
+  if (( t <= 4608 )); then h=$(( t * 35 / 100 )); else h=$(( t - 2048 )); fi
+  (( h < 1024 )) && h=1024; (( h > 6144 )) && h=6144; echo "$h"
+}
 part_names() { if [[ "$DISK" == *nvme* || "$DISK" == *mmcblk* ]]; then P1="${DISK}p1"; P2="${DISK}p2"; else P1="${DISK}1"; P2="${DISK}2"; fi; }
 
 # ---------------------------------------------------------------------------
@@ -695,10 +705,10 @@ do_install() {
   [ -x /opt/craftbox-panel/craftbox-panel ] || node_pkg=nodejs
   pacstrap -K /mnt \
     base linux linux-firmware mkinitcpio intel-ucode \
-    networkmanager openssh sudo \
-    jre-openjdk-headless \
-    git tmux nano vim htop jq curl wget which unzip $node_pkg \
-    msr-tools || fail "pacstrap falhou (rede ou espelho do Arch fora do ar?)"
+    "${CB_PACKAGES[@]}" $node_pkg || fail "pacstrap falhou (rede ou espelho do Arch fora do ar?)"
+  # várias JDKs (o painel escolhe por versão do MC: 8 ≤1.16, 17 até 1.20.4, 21 até
+  # 1.21.x, a mais nova pras versões por calendário); o `java` padrão é a mais nova
+  arch-chroot /mnt bash -c '. /dev/stdin; cb_java_default_newest' < /usr/local/lib/craftbox/system.sh
   genfstab -U /mnt >> /mnt/etc/fstab
   info "criando swap de 2 GB"
   if dd if=/dev/zero of=/mnt/swapfile bs=1M count=2048 status=none && chmod 600 /mnt/swapfile && mkswap /mnt/swapfile >/dev/null; then
@@ -754,11 +764,28 @@ rcon.port=25575
 rcon.password=$(head -c16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c12)
 server-port=25565
 EOF
+  # mesma tabela do java_for_mc do painel: AA.x → 25, 1.20.5+ → 21, 1.17+ → 17, senão 8
+  local jmajor jladder XMS=$HEAP mn pt
+  if [[ "$MCVER" =~ ^[0-9]{2}\. ]]; then jmajor=25
+  else
+    mn=$(cut -d. -f2 <<<"$MCVER"); pt=$(cut -d. -f3 <<<"$MCVER"); pt=${pt:-0}
+    if (( mn >= 21 || (mn == 20 && pt >= 5) )); then jmajor=21
+    elif (( mn >= 17 )); then jmajor=17; else jmajor=8; fi
+  fi
+  jladder=$(for v in 8 11 17 21 25; do (( v >= jmajor )) && printf '%s ' "$v"; done)
+  # pouca RAM: não reserva o heap todo de cara (-Xms = -Xmx + AlwaysPreTouch empurra pro swap)
+  (( HEAP < 2048 )) && XMS=512
   cat > "$MCDIR/start.sh" <<EOF
 #!/usr/bin/env bash
 cd "\$(dirname "\$0")"
-exec /usr/bin/java \\
-  -Xms${HEAP}M -Xmx${HEAP}M \\
+# JDK da versão do MC (a mesma escolha que o painel faz nos servidores que ele cria)
+export CRAFTBOX_JAVA_MAJOR=$jmajor
+JAVA=/usr/bin/java
+for v in $jladder; do
+  [ -x "/usr/lib/jvm/java-\$v-openjdk/bin/java" ] && { JAVA="/usr/lib/jvm/java-\$v-openjdk/bin/java"; break; }
+done
+exec "\$JAVA" \\
+  -Xms${XMS}M -Xmx${HEAP}M \\
   -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \\
   -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch \\
   -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M \\
@@ -809,46 +836,6 @@ EOF
   mkdir -p /mnt/etc/systemd/logind.conf.d
   printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' > /mnt/etc/systemd/logind.conf.d/lid.conf
 
-  # serviço do minecraft — TEMPLATE (uma unidade por instância: minecraft@<id>)
-  cat > /mnt/etc/systemd/system/minecraft@.service <<'EOF'
-[Unit]
-Description=Servidor Minecraft (%i)
-After=network-online.target
-Wants=network-online.target
-[Service]
-Type=simple
-User=minecraft
-Group=minecraft
-WorkingDirectory=/srv/minecraft/%i
-ExecStart=/srv/minecraft/%i/start.sh
-Restart=on-failure
-RestartSec=15
-# Paper/vanilla salvam o mundo ao receber SIGTERM
-KillSignal=SIGTERM
-TimeoutStopSec=90
-# parar o servidor (SIGTERM) faz a JVM sair com 143 — isso e' parada limpa, nao falha
-SuccessExitStatus=143 SIGTERM
-[Install]
-WantedBy=multi-user.target
-EOF
-  cat > /mnt/etc/systemd/system/mc-backup@.service <<'EOF'
-[Unit]
-Description=Backup do mundo (%i)
-[Service]
-Type=oneshot
-User=minecraft
-ExecStart=/srv/minecraft/%i/backup.sh
-EOF
-  cat > /mnt/etc/systemd/system/mc-backup@.timer <<'EOF'
-[Unit]
-Description=Backup diario do mundo (%i)
-[Timer]
-OnCalendar=*-*-* 05:00:00
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-
   cat > /mnt/etc/motd <<EOF
 
   craftbox — $SRV_HOST   (servidor inicial: $SRVNAME · $MCTYPE)
@@ -897,10 +884,20 @@ ISSUE
     install -Dm644 /etc/modules-load.d/msr.conf /mnt/etc/modules-load.d/msr.conf 2>/dev/null || true
   fi
 
+  # updater (sincroniza com as releases do GitHub) + versão instalada
+  install -Dm755 /usr/local/bin/craftbox-update /mnt/usr/local/bin/craftbox-update
+  install -Dm755 /usr/local/lib/craftbox/system.sh /mnt/usr/local/lib/craftbox/system.sh
+  if [ -f /etc/craftbox-release ]; then cp /etc/craftbox-release /mnt/etc/craftbox-release
+  else printf 'VERSION=%s\n' "$CB_VERSION" > /mnt/etc/craftbox-release; fi
+
   # painel: binário Rust (lê config.json e public/ ao lado dele) ou, sem ele, o server.js
-  local panel_exec="/usr/bin/node /opt/craftbox-panel/server.js"
-  [ -x /mnt/opt/craftbox-panel/craftbox-panel ] && panel_exec="/opt/craftbox-panel/craftbox-panel"
+  local panel_exec
+  panel_exec=$(CB_ROOT=/mnt cb_panel_exec)
   info "painel: $panel_exec"
+  # units (minecraft@, mc-backup@, craftbox-panel) e sudoers: fonte única no system.sh,
+  # a mesma que o craftbox-update usa depois
+  CB_ROOT=/mnt cb_write_units
+  CB_ROOT=/mnt cb_write_sudoers || fail "sudoers do painel inválido"
 
   # configuração dentro do chroot (só valores já validados; senhas vão por stdin, fora do script)
   cat > /mnt/root/chroot-setup.sh <<CHROOT
@@ -925,30 +922,6 @@ useradd -r -m -d /srv/minecraft -s /usr/bin/nologin minecraft || true
 chown -R minecraft:minecraft /srv/minecraft
 find /srv/minecraft -name '*.sh' -exec chmod +x {} +
 mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/minecraft
-
-if [ -d /opt/craftbox-panel ]; then
-  cat > /etc/systemd/system/craftbox-panel.service <<PSVC
-[Unit]
-Description=craftbox-panel (painel web)
-After=network-online.target
-[Service]
-Type=simple
-User=minecraft
-Group=minecraft
-WorkingDirectory=/opt/craftbox-panel
-ExecStart=$panel_exec
-Restart=on-failure
-RestartSec=5
-[Install]
-WantedBy=multi-user.target
-PSVC
-  cat > /etc/sudoers.d/craftbox-panel <<SUDO
-minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft@*, /usr/bin/systemctl stop minecraft@*, /usr/bin/systemctl restart minecraft@*
-minecraft ALL=(root) NOPASSWD: /usr/bin/tailscale up *, /usr/bin/tailscale down
-minecraft ALL=(root) NOPASSWD: /usr/bin/nmcli
-SUDO
-  chmod 440 /etc/sudoers.d/craftbox-panel
-fi
 
 systemctl enable NetworkManager sshd systemd-timesyncd
 systemctl enable minecraft@$SRVID

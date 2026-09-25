@@ -24,10 +24,13 @@ O craftbox vem com um **painel web** pra gerenciar tudo pelo navegador, com cara
 - 🖥️ **Multi-servidor** — crie/clone/apague vários servidores (**Paper**, **Fabric**, **Forge**, **NeoForge** ou **Pumpkin** — servidor em Rust, experimental), cada um com loader, versão e porta próprios; troca entre eles por um seletor. Filosofia "um rodando por vez" pra hardware fraco.
 - 📊 **Painel** — status (no ar/desligado), jogadores online (RCON) e stats em tempo real: frequência de CPU, RAM, disco, temperatura, load, **peso do mundo** e **velocidade da internet** (sob demanda).
 - ⏻ **Ligar / reiniciar / desligar** via systemd (ou `systemctl --user`, modo **rootless** sem sudo; no Docker, runner de processos diretos).
-- 🧩 **Loja de mods/plugins** estilo Prism/Modrinth — busca no [Modrinth](https://modrinth.com) com ícones, categorias e ordenação, **escolha de versão**, **dependências automáticas** e gestão dos instalados (ativar/desativar, atualizar, remover).
+- 🧩 **Loja de mods/plugins** estilo Prism/Modrinth — busca no [Modrinth](https://modrinth.com) com ícones, categorias e ordenação, **escolha de versão**, **dependências automáticas** e gestão dos instalados (ativar/desativar, atualizar, remover). Mods que não estão no Modrinth podem ser **enviados à mão**: botão **Enviar mods (.jar)** (vários de uma vez) ou arrastando os arquivos pra lista. E o botão **Baixar mods (.zip)** gera um zip pros amigos jogarem na pasta `mods` — com os mods só-de-cliente que o servidor desativou e um `LEIA-ME.txt` dizendo qual Minecraft/loader instalar.
 - 📦 **Modpacks** — cria um servidor a partir de um modpack do **Modrinth** (`.mrpack`) ou do **CurseForge** (precisa de uma chave grátis da API, colada na própria aba ou via `CRAFTBOX_CURSEFORGE_KEY`) em **Fabric/Quilt/Forge/NeoForge**. Mods que o autor bloqueou pra download automático são procurados no Modrinth pelo hash; os que sobrarem aparecem listados com link pra baixar, e um botão **Enviar arquivos baixados** no card do servidor recebe todos de uma vez (reconhece cada um pelo SHA-1, mesmo renomeado, e põe na pasta certa). Além disso, baixa os mods **em paralelo** (com **tela de carregamento** e progresso), **desativa sozinho os mods client-only** que derrubariam um servidor dedicado, monta a instância e mostra o link do pack pros jogadores instalarem o mesmo no cliente.
 - 🌐 **Integrações / Rede** — conecte o servidor sem abrir porta no roteador: **playit.gg** (túnel), **Cloudflare Tunnel** e **Tailscale** (VPN privada entre amigos), além de configurar **Wi-Fi** pelo próprio painel (`nmcli`).
 - 🎮 **Compatibilidade** — **modo offline** ("pirata", com plugin de login por usuário/senha) e **Bedrock** (Geyser + Floodgate) em 1 clique.
+- 📍 **Endereços prontos** — o painel mostra o `IP:porta` de cada servidor ligado, na rede de casa e pelo **Tailscale**, com um clique pra copiar; se você selecionar um servidor desligado, ele avisa qual está no ar e em que porta.
+- 🤖 **Conector MCP (Claude)** — o **Claude Code** controla o craftbox por você: liga/desliga servidores, lê logs, roda comandos, instala mods, mexe no `server.properties` e faz backups. Token gerado em **Configuração → Conector MCP**; veja [Conector MCP](#6-conector-mcp-claude-code).
+- ⬆️ **Atualização** — botão no painel (ou `sudo craftbox-update`) que sincroniza a máquina com a última release do GitHub: painel, scripts, configuração do sistema e pacotes do Arch, com verificação de sha256 e volta automática se algo der errado. Veja [Atualizar](#5-atualizar).
 - 🔐 **Acesso** — login por senha ou **contas de usuário** (papéis admin/user) e **histórico de ações**.
 - ⚙️ **Configuração** — editor visual do `server.properties`; **Console** RCON; **Logs** ao vivo; **Backups** do mundo.
 
@@ -114,6 +117,50 @@ sudo systemctl restart minecraft@principal  # reiniciar
 systemctl status craftbox-panel             # o painel web
 /srv/minecraft/principal/backup.sh          # backup manual do mundo
 ```
+
+### 5. Atualizar
+
+A máquina instalada se sincroniza com as **releases do GitHub** sem reinstalar: painel, scripts, units do systemd, sudoers e os pacotes do Arch (`pacman -Syu`). Os servidores e mundos em `/srv/minecraft` não são tocados nem reiniciados.
+
+- **Pelo painel:** Configuração → **Atualização do craftbox** → *Atualizar agora* (só admin). O log aparece ao vivo e o painel recarrega sozinho no fim.
+- **Pelo SSH:**
+  ```bash
+  sudo craftbox-update --check   # só mostra se há versão nova
+  sudo craftbox-update           # atualiza (pergunta antes)
+  ```
+- Cada release publica um `craftbox-system-<tag>.tar.gz` (+ `.sha256`) junto com a ISO; o updater só aplica se o sha256 conferir, guarda o painel anterior em `/var/backups/craftbox/` e **volta sozinho** se o painel novo não subir. Log em `/var/log/craftbox-update.log`.
+- Canal: por padrão pega a release mais nova, inclusive pré-release (`rc`). Pra ficar só nas estáveis: `echo CHANNEL=stable | sudo tee /etc/craftbox/update.conf`.
+- **Máquina instalada antes do updater existir (rc6 ou anterior):** rode uma vez
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/Vascon11/craftbox/main/airootfs/usr/local/bin/craftbox-update | sudo bash -s -- --yes
+  ```
+  Depois disso o botão do painel passa a funcionar.
+
+### 6. Conector MCP (Claude Code)
+
+O painel tem um endpoint [MCP](https://modelcontextprotocol.io) em `http://<ip>:8080/mcp` (transporte Streamable HTTP). Com ele, o **Claude Code** gerencia o craftbox por conversa ("liga o Cursed Walking", "quem está online?", "instala o Chunky e pré-gera 2000 blocos").
+
+1. No painel, **Configuração → Conector MCP → Gerar token** (só admin).
+2. Rode o comando que aparece, no computador onde você usa o Claude Code:
+   ```bash
+   claude mcp add --transport http --scope user craftbox http://IP:8080/mcp --header "Authorization: Bearer cbx_…"
+   ```
+3. No Claude Code, `/mcp` mostra o **craftbox** conectado.
+
+| ferramenta | o que faz |
+|---|---|
+| `list_servers`, `server_status` | servidores, estado, jogadores, CPU/RAM/disco |
+| `power_server` | ligar / desligar / reiniciar |
+| `run_command`, `get_logs` | comando no console (RCON) e últimas linhas do log |
+| `get_properties`, `set_properties` | ler e alterar o `server.properties` |
+| `list_mods`, `search_mods`, `install_mod`, `toggle_mod`, `remove_mod`, `check_mod_updates` | mods/plugins via Modrinth |
+| `list_backups`, `create_backup` | backups do mundo |
+| `create_server`, `get_create_progress` | criar servidor (Paper/Fabric/Quilt/Forge/NeoForge/vanilla) |
+| `get_network_info`, `world_size`, `get_audit_log` | endereços (Tailscale/playit/Cloudflare), tamanho do mundo, histórico |
+
+- Cada token age como **o admin que o criou**, passa pelas mesmas validações do painel e tudo fica no **histórico** com o IP marcado "via MCP". Revogue quando quiser na mesma tela.
+- O token é guardado só como hash (SHA-256) no `config.json`. Use o conector na rede de casa ou pelo **Tailscale** — o painel é HTTP simples e não deve ser exposto na internet.
+- Só existe no painel em Rust (o da ISO e do Docker); o backend Node antigo não tem o endpoint.
 
 ---
 

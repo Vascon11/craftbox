@@ -21,6 +21,7 @@ jobs:
           docker run --rm --privileged \
             -v "$PWD":/build \
             -v "$PWD/out":/out \
+            -e CB_VERSION="${{ github.ref_name }}" \
             docker.io/library/archlinux:latest \
             bash /build/scripts/build-in-container.sh
 
@@ -34,6 +35,7 @@ jobs:
           path: |
             out/*.iso
             out/*.sha256
+            out/craftbox-system-*
           retention-days: 14
 
       - name: Publica Release (apenas em tags)
@@ -41,9 +43,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: craftbox ${{ github.ref_name }}
+          # craftbox-system-<tag>.tar.gz(.sha256) = o que o craftbox-update baixa
           files: |
             out/*.iso
             out/*.sha256
+            out/craftbox-system-*
           generate_release_notes: true
           # tag com '-' (ex: v1.0.0-rc1) sai marcada como pré-release
           prerelease: ${{ contains(github.ref_name, '-') }}

@@ -1807,6 +1807,80 @@ function manualModUpload(dir, name, data) {
   writeInstanceMeta(dir, meta);
   return { code: 200, file, rest };
 }
+// mod/plugin enviado à mão: só .jar que seja zip de verdade; vai pra mods/ ou plugins/
+function uploadContent(name, data) {
+  const base = path.basename(name || '');
+  if (!base || base.startsWith('.') || !base.toLowerCase().endsWith('.jar')) return { code: 400, error: `${base || 'arquivo'}: só dá pra enviar arquivos .jar` };
+  if (data.length < 4 || data[0] !== 0x50 || data[1] !== 0x4b || data[2] !== 3 || data[3] !== 4) return { code: 400, error: `${base}: não é um .jar válido` };
+  const loader = detectLoader();
+  const folder = contentFolder(loader);
+  const dest = path.join(folder, base), disabled = dest + '.disabled', tmp = dest + '.part';
+  const replaced = fs.existsSync(dest) || fs.existsSync(disabled);
+  try { fs.writeFileSync(tmp, data); fs.renameSync(tmp, dest); }
+  catch (e) { try { fs.unlinkSync(tmp); } catch {} return { code: 500, error: e.message }; }
+  try { fs.unlinkSync(disabled); } catch {}
+  return { code: 200, body: { ok: true, file: base, folder: ['fabric', 'quilt', 'forge', 'neoforge'].includes(loader) ? 'mods' : 'plugins', replaced } };
+}
+// ---- zip sem compressão ("stored"): o sistema instalado não tem o comando `zip` ----
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[i] = c >>> 0; } return t; })();
+function crc32(buf, crc = 0) { let c = ~crc >>> 0; for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return ~c >>> 0; }
+function writeStoredZip(fd, entries) { // entries: [{name, path?|data?}]
+  if (entries.length > 0xFFFF) throw new Error('arquivos demais pra um zip sem ZIP64');
+  const DATE = ((2026 - 1980) << 9) | (1 << 5) | 1;
+  const central = []; let offset = 0; const chunk = Buffer.alloc(256 * 1024);
+  for (const e of entries) {
+    const nb = Buffer.from(e.name, 'utf8'), at = offset;
+    const h = Buffer.alloc(30); h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt16LE(0x0800, 6); h.writeUInt16LE(0, 8);
+    h.writeUInt16LE(0, 10); h.writeUInt16LE(DATE, 12); h.writeUInt16LE(nb.length, 26);
+    fs.writeSync(fd, h, 0, 30, offset); fs.writeSync(fd, nb, 0, nb.length, offset + 30); offset += 30 + nb.length;
+    let crc = 0, size = 0;
+    if (e.data) { crc = crc32(e.data); size = e.data.length; fs.writeSync(fd, e.data, 0, size, offset); offset += size; }
+    else {
+      const src = fs.openSync(e.path, 'r');
+      try { let n; while ((n = fs.readSync(src, chunk, 0, chunk.length, null)) > 0) { const b = chunk.subarray(0, n); crc = crc32(b, crc); fs.writeSync(fd, b, 0, n, offset); offset += n; size += n; } }
+      finally { fs.closeSync(src); }
+    }
+    if (size > 0xFFFFFFFF || offset > 0xFFFFFFFF) throw new Error('o zip passaria de 4 GiB (sem suporte a ZIP64)');
+    const f = Buffer.alloc(12); f.writeUInt32LE(crc, 0); f.writeUInt32LE(size, 4); f.writeUInt32LE(size, 8); fs.writeSync(fd, f, 0, 12, at + 14);
+    const c = Buffer.alloc(46); c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE((3 << 8) | 20, 4); c.writeUInt16LE(20, 6); c.writeUInt16LE(0x0800, 8);
+    c.writeUInt16LE(0, 10); c.writeUInt16LE(0, 12); c.writeUInt16LE(DATE, 14); c.writeUInt32LE(crc, 16); c.writeUInt32LE(size, 20); c.writeUInt32LE(size, 24);
+    c.writeUInt16LE(nb.length, 28); c.writeUInt32LE((0o100644 << 16) >>> 0, 38); c.writeUInt32LE(at, 42);
+    central.push(c, nb);
+  }
+  const cd = Buffer.concat(central);
+  if (offset + cd.length > 0xFFFFFFFF) throw new Error('o zip passaria de 4 GiB (sem suporte a ZIP64)');
+  fs.writeSync(fd, cd, 0, cd.length, offset);
+  const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16); fs.writeSync(fd, end, 0, 22, offset + cd.length);
+}
+// zip com os mods que os jogadores precisam (ativos + os só-de-cliente que o painel desativou) + LEIA-ME
+function modsZip() {
+  const loader = detectLoader();
+  if (!['fabric', 'quilt', 'forge', 'neoforge'].includes(loader)) return { code: 400, error: 'servidor de plugins (Paper/vanilla): os jogadores não precisam de mods' };
+  const folder = contentFolder(loader), meta = readInstanceMeta(SRV().dir);
+  const stripped = Array.isArray(meta.strippedMods) ? meta.strippedMods.map(String) : [];
+  const files = [];
+  let names = []; try { names = fs.readdirSync(folder); } catch {}
+  for (const n of names) {
+    if (n.endsWith('.jar')) files.push({ name: n, path: path.join(folder, n) });
+    else if (n.endsWith('.jar.disabled') && stripped.includes(n.slice(0, -'.disabled'.length))) files.push({ name: n.slice(0, -'.disabled'.length), path: path.join(folder, n) });
+  }
+  if (!files.length) return { code: 404, error: 'nenhum mod instalado neste servidor' };
+  files.sort((a, b) => a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0);
+  const mc = detectMcVersion() || '?', lv = meta.loaderVersion ? ' ' + meta.loaderVersion : '';
+  const ln = { forge: 'Forge', neoforge: 'NeoForge', quilt: 'Quilt' }[loader] || 'Fabric';
+  let readme = `Mods do servidor "${SRV().name}" (craftbox)\r\n\r\nMinecraft ${mc}  +  ${ln}${lv}\r\n${files.length} mods\r\n\r\nComo usar:\r\n` +
+    ` 1. Crie uma instância Minecraft ${mc} com ${ln}${lv} (Prism Launcher, CurseForge ou o instalador do ${ln}).\r\n` +
+    ` 2. Extraia estes arquivos .jar dentro da pasta "mods" da instância (.minecraft/mods).\r\n` +
+    ` 3. Abra o jogo e entre no servidor. Se aparecer "mods diferentes", confira se não sobrou mod antigo na pasta.\r\n`;
+  if (meta.modpack) readme += `\r\nEste servidor usa o modpack ${meta.modpack.name || ''} ${meta.modpack.version || ''}. Dá pra instalar o pack inteiro (com configs, texturas e shaders) por:\r\n${meta.modpack.url || ''}\r\n`;
+  const tmp = path.join(os.tmpdir(), `craftbox-mods-${crypto.randomBytes(6).toString('hex')}.zip`);
+  try {
+    const fd = fs.openSync(tmp, 'w');
+    try { writeStoredZip(fd, [{ name: 'LEIA-ME.txt', data: Buffer.from(readme, 'utf8') }, ...files]); } finally { fs.closeSync(fd); }
+    return { code: 200, tmp, size: fs.statSync(tmp).size, count: files.length };
+  } catch (e) { try { fs.unlinkSync(tmp); } catch {} return { code: 500, error: 'não consegui montar o zip: ' + e.message }; }
+}
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 function serveStatic(res, file) {
   const full = path.join(PUBLIC, file);
@@ -1986,6 +2060,23 @@ const server = http.createServer((req, res) => {
           audit('mod-install', `${slug} → ${SRV().name}`);
           return json(res, 200, { ok: true, installed });
         } catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      if (p === '/api/content/download-all' && req.method === 'GET') {
+        const r = modsZip();
+        if (r.code !== 200) return json(res, r.code, { error: r.error });
+        audit('mods-baixar-zip', `${r.count} mods → ${SRV().name}`);
+        const safe = String(SRV().id).replace(/[^A-Za-z0-9_-]/g, '-');
+        res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': r.size, 'Content-Disposition': `attachment; filename="${safe}-mods.zip"` });
+        const rs = fs.createReadStream(r.tmp);
+        rs.on('close', () => { try { fs.unlinkSync(r.tmp); } catch {} });
+        rs.pipe(res);
+        return;
+      }
+      if (p === '/api/content/upload' && req.method === 'POST') {
+        const r = uploadContent(url.searchParams.get('name') || '', await readRaw(req));
+        if (r.code !== 200) return json(res, r.code, { error: r.error });
+        audit('mod-enviar', `${r.body.file} → ${SRV().name}`);
+        return json(res, 200, r.body);
       }
       if (p === '/api/modpacks/manual-upload' && req.method === 'POST') {
         const r = manualModUpload(SRV().dir, url.searchParams.get('name') || '', await readRaw(req));

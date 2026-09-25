@@ -283,9 +283,13 @@ pub fn install_quilt_server(dir: &str, mc: &str, loader_ver: Option<&str>) -> Re
     args.push(format!("--install-dir={}", dir));
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     let r = runner::run_with(
-        "/usr/bin/java",
+        &java_bin(mc),
         &a,
-        RunOpts { timeout: Some(Duration::from_secs(600)), cwd: Some(dir), ..Default::default() },
+        RunOpts {
+            timeout: Some(Duration::from_secs(600)),
+            cwd: Some(dir),
+            env: vec![("CRAFTBOX_JAVA_MAJOR", runner::java_for_mc(mc).to_string())],
+        },
     );
     if r.code != 0 {
         return Err(format!("instalador Quilt falhou: {}", tail_chars(&r.output(), 200)));
@@ -328,9 +332,9 @@ fn find_args_file(dir: &str) -> Option<String> {
 fn run_installer(dir: &str, url: &str, label: &str, mc: &str) -> Result<(), String> {
     let jar = jsutil::path_join(&[dir, "installer.jar"]);
     net::download(url, &jar)?;
-    // o wrapper 'java' da imagem Docker escolhe a JDK por CRAFTBOX_JAVA_MAJOR (fora dele é ignorado)
+    // no appliance a JDK certa vem do java_bin; no Docker o wrapper 'java' escolhe por CRAFTBOX_JAVA_MAJOR
     let r = runner::run_with(
-        "/usr/bin/java",
+        &java_bin(mc),
         &["-jar", &jar, "--installServer"],
         RunOpts {
             timeout: Some(Duration::from_secs(900)),
@@ -439,14 +443,46 @@ fn write_exec(path: &str, content: &str) {
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
 }
 
-pub fn write_start_script(dir: &str) {
+/// Majors de JDK que o painel sabe usar, do mais velho pro mais novo.
+const JAVA_MAJORS: [u32; 5] = [8, 11, 17, 21, 25];
+
+/// Trecho de shell que escolhe a JDK na hora de ligar: a exata do MC
+/// (`/usr/lib/jvm/java-N-openjdk`, caminho do Arch e do Fedora), senão a menor
+/// instalada acima dela, senão `/usr/bin/java`. No Docker nenhuma dessas pastas
+/// existe e o wrapper `/usr/bin/java` escolhe pela `CRAFTBOX_JAVA_MAJOR`.
+fn java_pick_sh(mc: &str) -> String {
+    let major = runner::java_for_mc(mc);
+    let ladder: Vec<String> = JAVA_MAJORS.iter().filter(|v| **v >= major).map(|v| v.to_string()).collect();
+    format!(
+        "export CRAFTBOX_JAVA_MAJOR={}\nJAVA=/usr/bin/java\nfor v in {}; do\n  [ -x \"/usr/lib/jvm/java-$v-openjdk/bin/java\" ] && {{ JAVA=\"/usr/lib/jvm/java-$v-openjdk/bin/java\"; break; }}\ndone\n",
+        major,
+        ladder.join(" ")
+    )
+}
+
+/// Mesma escolha do `java_pick_sh`, pros instaladores rodados pelo painel.
+pub fn java_bin(mc: &str) -> String {
+    let major = runner::java_for_mc(mc);
+    JAVA_MAJORS
+        .iter()
+        .filter(|v| **v >= major)
+        .map(|v| format!("/usr/lib/jvm/java-{}-openjdk/bin/java", v))
+        .find(|p| std::path::Path::new(p).exists())
+        .unwrap_or_else(|| "/usr/bin/java".into())
+}
+
+pub fn write_start_script(dir: &str, mc: &str) {
     let heap = json::num_to_string(heap_mb());
     let jvm = format!(
         "-Xms512M -Xmx{}M -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
          -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true",
         heap
     );
-    let sh = format!("#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\nexec /usr/bin/java {} -jar server.jar nogui\n", jvm);
+    let sh = format!(
+        "#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\n{}exec \"$JAVA\" {} -jar server.jar nogui\n",
+        java_pick_sh(mc),
+        jvm
+    );
     write_exec(&jsutil::path_join(&[dir, "start.sh"]), &sh);
 }
 
@@ -463,15 +499,21 @@ ls -1t backups/*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm -f
     write_exec(&jsutil::path_join(&[dir, "backup.sh"]), sh);
 }
 
-pub fn write_forge_start(dir: &str) {
+pub fn write_forge_start(dir: &str, mc: &str) {
     let heap = json::num_to_string(heap_mb());
     let _ = std::fs::write(jsutil::path_join(&[dir, "user_jvm_args.txt"]), format!("-Xms512M\n-Xmx{}M\n", heap));
     let execline = match find_args_file(dir) {
-        Some(rel) => format!("exec /usr/bin/java @user_jvm_args.txt @{} nogui", rel),
-        None if std::path::Path::new(&jsutil::path_join(&[dir, "run.sh"])).exists() => "exec bash run.sh nogui".into(),
-        None => format!("exec /usr/bin/java -Xmx{}M -jar server.jar nogui", heap),
+        Some(rel) => format!("exec \"$JAVA\" @user_jvm_args.txt @{} nogui", rel),
+        // o run.sh do Forge chama `java` do PATH: põe a JDK escolhida na frente
+        None if std::path::Path::new(&jsutil::path_join(&[dir, "run.sh"])).exists() => {
+            "export PATH=\"$(dirname \"$JAVA\"):$PATH\"\nexec bash run.sh nogui".into()
+        }
+        None => format!("exec \"$JAVA\" -Xmx{}M -jar server.jar nogui", heap),
     };
-    write_exec(&jsutil::path_join(&[dir, "start.sh"]), &format!("#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\n{}\n", execline));
+    write_exec(
+        &jsutil::path_join(&[dir, "start.sh"]),
+        &format!("#!/usr/bin/env bash\ncd \"$(dirname \"$0\")\"\n{}{}\n", java_pick_sh(mc), execline),
+    );
 }
 
 pub fn unique_id(cfg: &Map, base: &str) -> String {
@@ -595,7 +637,7 @@ pub fn create_instance(st: &State, cfg: &Map, name: &str, loader: &str, version:
         let _ = std::fs::write(jsutil::path_join(&[&dir, "eula.txt"]), "eula=true\n");
         let _ = std::fs::write(jsutil::path_join(&[&dir, ".craftbox-loader"]), format!("{}\n", loader));
         write_server_props(&dir, port, rcon_port, &rpass, name);
-        write_forge_start(&dir);
+        write_forge_start(&dir, &mc);
         write_backup_script(&dir);
         let _ = std::fs::create_dir_all(jsutil::path_join(&[&dir, "mods"]));
         let meta = obj! {
@@ -620,7 +662,7 @@ pub fn create_instance(st: &State, cfg: &Map, name: &str, loader: &str, version:
     let _ = std::fs::write(jsutil::path_join(&[&dir, "eula.txt"]), "eula=true\n");
     let _ = std::fs::write(jsutil::path_join(&[&dir, ".craftbox-loader"]), format!("{}\n", loader));
     write_server_props(&dir, port, rcon_port, &rpass, name);
-    write_start_script(&dir);
+    write_start_script(&dir, &resolved);
     write_backup_script(&dir);
     let _ = std::fs::create_dir_all(jsutil::path_join(&[&dir, if loader == "fabric" { "mods" } else { "plugins" }]));
     let meta = obj! { "name" => disp.clone(), "loader" => loader, "mcVersion" => resolved.clone(), "port" => port, "createdAt" => jsutil::now_ms() };

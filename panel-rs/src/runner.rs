@@ -334,7 +334,9 @@ pub fn unit_stop(cfg: &Map, unit: &str) {
     loop {
         std::thread::sleep(Duration::from_millis(500));
         n += 1;
-        if !proc_alive(pid) || n > 24 {
+        // até 10 min: salvar o mundo num HD leva minutos (medido: 220 s num
+        // Fabric 1.20.1 recém-gerado); SIGKILL antes disso corrompe o mundo
+        if !proc_alive(pid) || n > 1200 {
             break;
         }
     }
@@ -457,11 +459,57 @@ pub fn svc_action(exec_runner: bool, cfg: &Map, action: &str, service: &str) -> 
         return Ok(unit_action(cfg, action, service));
     }
     // rootless: systemctl --user <action> <svc> | sistema: sudoers permitindo systemctl <action> <svc>
+    // stop sem bloquear: salvar o mundo leva minutos e o systemctl estouraria o
+    // RUN_TIMEOUT; a UI acompanha pelo estado "deactivating"
+    let mut args = vec![action, service];
+    if action == "stop" {
+        args.push("--no-block");
+    }
     Ok(if config::systemctl_user(cfg) {
-        run("systemctl", &["--user", action, service], RUN_TIMEOUT)
+        let mut a = vec!["--user"];
+        a.extend(args);
+        run("systemctl", &a, RUN_TIMEOUT)
     } else {
-        run("sudo", &["-n", "systemctl", action, service], RUN_TIMEOUT)
+        let mut a = vec!["-n", "systemctl"];
+        a.extend(args);
+        run("sudo", &a, RUN_TIMEOUT)
     })
+}
+
+/// Parada de emergência: pede a parada sem esperar a unidade terminar.
+/// `force` = SIGKILL direto (perde o que não foi salvo), pra quando a máquina
+/// está travada em swap e o servidor nem responde ao SIGTERM.
+pub fn svc_stop_nowait(exec_runner: bool, cfg: &Map, service: &str, force: bool) -> RunResult {
+    if exec_runner {
+        let (pid, _) = run_info(cfg, service);
+        if pid == 0.0 || !proc_alive(pid) {
+            return RunResult::ok();
+        }
+        if force {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        } else {
+            let (cfg, service) = (cfg.clone(), service.to_string());
+            std::thread::spawn(move || unit_stop(&cfg, &service));
+        }
+        return RunResult::ok();
+    }
+    // forçado: enfileira o stop antes do SIGKILL, senão o Restart=on-failure religa o servidor
+    let mut steps: Vec<Vec<&str>> = vec![vec!["stop", service, "--no-block"]];
+    if force {
+        steps.push(vec!["kill", "--signal=SIGKILL", service]);
+    }
+    let mut last = RunResult::ok();
+    for args in steps {
+        let mut a: Vec<&str> = if config::systemctl_user(cfg) { vec!["systemctl", "--user"] } else { vec!["sudo", "-n", "systemctl"] };
+        a.extend(args);
+        last = run(a[0], &a[1..], RUN_TIMEOUT);
+        if last.code != 0 {
+            break;
+        }
+    }
+    last
 }
 
 /// `daemonReload()`

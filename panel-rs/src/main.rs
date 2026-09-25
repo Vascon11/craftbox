@@ -23,6 +23,7 @@ mod http;
 mod integrations;
 mod json;
 mod jsutil;
+mod mcp;
 mod modpacks;
 mod net;
 mod rcon;
@@ -30,6 +31,7 @@ mod routes;
 mod runner;
 mod servers;
 mod stats;
+mod zipw;
 
 use json::{Map, Value};
 use std::net::TcpListener;

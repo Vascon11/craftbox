@@ -327,9 +327,9 @@ fn finish_pack_instance(
         let _ = ctx::write_props(dir, &up);
     }
     if loader == "forge" || loader == "neoforge" {
-        servers::write_forge_start(dir);
+        servers::write_forge_start(dir, mc);
     } else {
-        servers::write_start_script(dir);
+        servers::write_start_script(dir, mc);
     }
     servers::write_backup_script(dir);
     let _ = std::fs::create_dir_all(jsutil::path_join(&[dir, "mods"]));

@@ -349,3 +349,21 @@ button.sm{padding:.4rem .7rem;font-size:.82rem;border-radius:8px}
 .cfg-sec summary:hover{color:var(--accent)}
 .cfg-sec[open] summary{border-bottom:1px solid var(--line)}
 .props-sec{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.9rem;padding:.9rem}
+
+/* endereços pra entrar no servidor (IP:porta, rede local e Tailscale) */
+.join-box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:.75rem .9rem;margin:-.3rem 0 1.1rem}
+.join-box.on{border-color:var(--accent2)}
+.join-box .join-title{font-weight:600;margin-bottom:.45rem}
+.join-row{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;margin:.25rem 0}
+.join-row .lbl{color:var(--muted);font-size:.8rem;min-width:7.5rem}
+.addr{display:inline-flex;align-items:center;gap:.4rem;background:var(--card2);border:1px solid var(--line);border-radius:8px;
+  padding:.28rem .55rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88rem;cursor:pointer;color:var(--txt)}
+.addr:hover{border-color:var(--accent)}
+.addr .cp{font-family:inherit;font-size:.72rem;color:var(--muted)}
+.addr-list{display:flex;flex-direction:column;gap:.35rem;margin-top:.5rem}
+.addr-list .off{opacity:.55}
+
+/* envio manual de mods (.jar) */
+label.btn-like{display:inline-flex;align-items:center;gap:.35rem;cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:.5rem .9rem;font-weight:600;font-size:.9rem;user-select:none}
+label.btn-like:hover{border-color:var(--accent)}
+.drop-target.dragging{outline:2px dashed var(--accent);outline-offset:6px;border-radius:10px;min-height:4rem}

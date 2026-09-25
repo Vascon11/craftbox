@@ -66,6 +66,12 @@ fn pkt(id: i32, typ: i32, body: &str) -> Vec<u8> {
 }
 
 pub fn command(cfg: &Map, srv: &Srv, cmd: &str) -> Result<String, String> {
+    command_timeout(cfg, srv, cmd, TIMEOUT)
+}
+
+/// `command` com timeout próprio (a sonda de status usa um curto: servidor
+/// travado não pode segurar o /api/status por 6 s).
+pub fn command_timeout(cfg: &Map, srv: &Srv, cmd: &str, timeout: Duration) -> Result<String, String> {
     let pw = password(cfg, srv);
     if pw.is_empty() {
         return Err("RCON sem senha (habilite enable-rcon no server.properties)".into());
@@ -80,15 +86,15 @@ pub fn command(cfg: &Map, srv: &Srv, cmd: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .next()
         .ok_or("host RCON não resolvido")?;
-    let mut sock = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(|e| {
+    let mut sock = TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
         if e.kind() == std::io::ErrorKind::TimedOut {
             "RCON timeout".to_string()
         } else {
             e.to_string()
         }
     })?;
-    sock.set_read_timeout(Some(TIMEOUT)).ok();
-    sock.set_write_timeout(Some(TIMEOUT)).ok();
+    sock.set_read_timeout(Some(timeout)).ok();
+    sock.set_write_timeout(Some(timeout)).ok();
     sock.write_all(&pkt(1, 3, &pw)).map_err(|e| e.to_string())?;
     let mut buf: Vec<u8> = Vec::new();
     let mut authed = false;

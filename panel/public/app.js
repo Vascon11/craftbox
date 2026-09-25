@@ -34,7 +34,112 @@ $('#loginForm').addEventListener('submit', async (e) => {
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
 async function showApp() { $('#app').hidden = false; await loadServers(); reloadAll(); }
-function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); loadNet(); measureWorld(); }
+function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); loadMcp(); loadNet(); measureWorld(); }
+
+// ---- atualização do sistema (craftbox-update) ----
+let updTimer;
+async function loadUpdate() {
+  const card = $('#updCard'); if (!card) return;
+  const { ok, data } = await api('/api/system/update');
+  if (ok && data.supported === false) { card.hidden = true; return; }
+  card.hidden = false;
+  const info = $('#updInfo'), btn = $('#updRun');
+  if (!ok) { info.textContent = '⚠ ' + (data.error || 'não consegui checar (sem internet?)'); btn.hidden = true; return; }
+  const pre = data.prerelease ? ' <span class="tag">pré-release</span>' : '';
+  if (data.running) { info.innerHTML = '⏳ Atualização em andamento…'; btn.hidden = true; followUpdate(); return; }
+  if (data.update && !data.hasPackage) {
+    info.innerHTML = `Instalada: <b>${esc(data.current)}</b> · no GitHub: <b>${esc(data.latest)}</b>${pre} — essa release não tem o pacote de atualização.`;
+    btn.hidden = true; return;
+  }
+  info.innerHTML = data.update
+    ? `Instalada: <b>${esc(data.current)}</b> → disponível: <b>${esc(data.latest)}</b>${pre} · <a href="${esc(data.url)}" target="_blank" rel="noopener">o que mudou</a>`
+    : `✓ Em dia: <b>${esc(data.current)}</b>${pre}`;
+  btn.hidden = !data.update;
+}
+async function followUpdate() {
+  const logEl = $('#updLog'); logEl.hidden = false;
+  clearInterval(updTimer);
+  let seenRunning = false, misses = 0;
+  updTimer = setInterval(async () => {
+    let r;
+    try { r = await api('/api/system/update/log'); } catch { r = { ok: false }; }
+    if (!r.ok) { misses++; if (misses < 90) return; clearInterval(updTimer); return; } // painel reiniciando
+    misses = 0;
+    logEl.textContent = r.data.log || '';
+    logEl.scrollTop = logEl.scrollHeight;
+    if (r.data.running) { seenRunning = true; return; }
+    if (seenRunning || /=== fim|ERRO:/.test(r.data.log || '')) {
+      clearInterval(updTimer);
+      if (/✓ craftbox em/.test(r.data.log || '')) { toast('craftbox atualizado — recarregando o painel…'); setTimeout(() => location.reload(), 2500); }
+      else { toast('A atualização terminou com erro — veja o log.', 'err'); loadUpdate(); }
+    }
+  }, 2000);
+}
+$('#updCheck').addEventListener('click', () => { $('#updInfo').textContent = 'verificando…'; loadUpdate(); });
+$('#updRun').addEventListener('click', async () => {
+  if (!await confirmDialog('Atualizar o craftbox agora? O painel reinicia no fim (fica fora do ar por alguns segundos). Os servidores de Minecraft continuam como estão.', { okText: 'Atualizar' })) return;
+  const r = await api('/api/system/update', { method: 'POST', body: '{}' });
+  if (!r.ok) return toast(r.data.error || 'falha ao iniciar', 'err');
+  $('#updRun').hidden = true; $('#updInfo').innerHTML = '⏳ Atualização em andamento…';
+  followUpdate();
+});
+
+// ---- copiar texto (clipboard só existe em HTTPS/localhost; em http://IP usa execCommand) ----
+async function copyText(text) {
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch {}
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.append(ta); ta.focus(); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch {}
+  ta.remove(); return ok;
+}
+document.addEventListener('click', async (e) => {
+  const a = e.target.closest('.addr[data-copy]'); if (!a) return;
+  const ok = await copyText(a.dataset.copy);
+  toast(ok ? `Copiado: ${a.dataset.copy}` : 'Não deu pra copiar — selecione e use Ctrl+C.', ok ? undefined : 'err');
+});
+
+// ---- endereços pra entrar (IP da rede + IP do Tailscale, com a porta de cada servidor) ----
+const netAddr = { lan: '', ts: '' };
+let lastServers = [];
+function addrChip(ip, port) {
+  if (!ip || !port) return '';
+  const a = `${ip}:${port}`;
+  return `<span class="addr" data-copy="${esc(a)}" title="Clique pra copiar">${esc(a)} <span class="cp">copiar</span></span>`;
+}
+function addrRows(port) {
+  const rows = [];
+  if (netAddr.lan) rows.push(`<div class="join-row"><span class="lbl">Rede de casa</span>${addrChip(netAddr.lan, port)}</div>`);
+  if (netAddr.ts) rows.push(`<div class="join-row"><span class="lbl">Tailscale (VPN)</span>${addrChip(netAddr.ts, port)}</div>`);
+  return rows.join('') || `<div class="muted small">porta ${esc(port)} — não consegui descobrir o IP desta máquina.</div>`;
+}
+function renderJoin() {
+  const box = $('#joinBox'); if (!box) return;
+  const servers = lastServers || [];
+  const cur = servers.find(s => s.selected) || servers.find(s => s.id === currentServer) || servers[0];
+  if (!cur || !cur.port) { box.hidden = true; return; }
+  const on = cur.active === 'active';
+  const others = servers.filter(s => s.active === 'active' && s.id !== cur.id);
+  let html;
+  if (on) html = `<div class="join-title">🟢 Pra entrar em <b>${esc(cur.name)}</b>, use no Minecraft:</div>${addrRows(cur.port)}`;
+  else html = `<div class="join-title">⚪ <b>${esc(cur.name)}</b> está desligado — ligue antes de entrar.</div><div class="muted small">Quando ligar, o endereço vai ser:</div>${addrRows(cur.port)}`;
+  if (others.length) html += `<div class="intg-note warn small" style="margin-top:.5rem">No ar agora: ${others.map(o => `<b>${esc(o.name)}</b> na porta <b>${esc(o.port)}</b>`).join(', ')} — é nessa porta que dá pra entrar.</div>`;
+  box.innerHTML = html;
+  box.classList.toggle('on', on);
+  box.hidden = false;
+  renderTsServers();
+}
+// no card do Tailscale: o endereço VPN de cada servidor (os ligados primeiro)
+function renderTsServers() {
+  const box = $('#tsServers'); if (!box) return;
+  if (!netAddr.ts || !(lastServers || []).length) { box.innerHTML = ''; return; }
+  const list = [...lastServers].sort((a, b) => (b.active === 'active') - (a.active === 'active'));
+  box.innerHTML = `<div class="small" style="margin-top:.2rem"><b>Endereços pela VPN:</b></div>` + list.map(s => {
+    const on = s.active === 'active';
+    return `<div class="join-row ${on ? '' : 'off'}"><span class="lbl">${on ? '🟢' : '⚪'} ${esc(s.name)}</span>${addrChip(netAddr.ts, s.port)}${on ? '' : '<span class="muted small">desligado</span>'}</div>`;
+  }).join('');
+  box.className = 'addr-list';
+}
 
 // ---- multi-servidor ----
 async function loadServers() {
@@ -54,7 +159,24 @@ async function loadServers() {
     const cur = data.servers.find(s => s.id === currentServer);
     consoleSrv(cur ? cur.name : currentServer);
   } else currentServer = '';
+  lastServers = data.servers || [];
+  const curSrv = lastServers.find(s => s.id === currentServer) || lastServers[0];
+  applyLoaderUi(curSrv && curSrv.loader);
   renderServersOverview(data.servers);
+  renderJoin();
+}
+// Pumpkin não tem loja (mods/plugins) nem server.properties nem modo offline/Bedrock via plugin
+function applyLoaderUi(loader) {
+  const pk = loader === 'pumpkin';
+  ['conteudo', 'compat'].forEach(t => {
+    const b = document.querySelector(`.tab[data-tab="${t}"]`);
+    if (!b) return;
+    b.hidden = pk;
+    if (pk && b.classList.contains('active')) { const p = document.querySelector('.tab[data-tab="painel"]'); if (p) p.click(); }
+  });
+  const pc = $('#propsCard'), note = $('#pumpkinCfgNote');
+  if (pc) pc.hidden = pk;
+  if (note) note.hidden = !pk;
 }
 function serverPower(id, action) { return api('/api/servers/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: JSON.stringify({}) }); }
 function renderServersOverview(servers) {
@@ -75,6 +197,7 @@ function renderServersOverview(servers) {
         <span class="status-pill"><span class="dot ${running ? 'on' : 'idle'}"></span>${running ? 'no ar' : 'desligado'}</span>
       </div>
       <div class="muted small">${esc(s.loader)}${s.mcVersion ? ' ' + esc(s.mcVersion) : ''} · porta ${s.port || '?'}${s.selected ? ' · <b>selecionado</b>' : ''}${s.modpack ? ' · 📦 modpack' : ''}</div>
+      ${running && s.port ? `<div class="join-row" style="margin-top:.45rem">${addrChip(netAddr.lan, s.port)}${addrChip(netAddr.ts, s.port)}</div>` : ''}
       <div class="store-foot">
         <button class="ghost sm act-sel">Selecionar</button><span class="grow"></span>
         ${running ? '<button class="danger sm act-stop">Desligar</button>' : '<button class="ok sm act-start">Ligar</button>'}
@@ -94,6 +217,8 @@ function renderServersOverview(servers) {
 async function switchServer(id) {
   await api('/api/servers/select', { method: 'POST', body: JSON.stringify({ id }) });
   currentServer = id;
+  const sv = (lastServers || []).find(x => x.id === id);
+  applyLoaderUi(sv && sv.loader);
   resetConsole();
   consoleSrv(id);
   reloadAll();
@@ -166,6 +291,7 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   if (t.dataset.tab === 'conteudo') { loadContentInfo(); loadInstalled(); }
   if (t.dataset.tab === 'console') refreshLogs(true);
   if (t.dataset.tab === 'integra') loadIntegrations();
+  if (t.dataset.tab === 'config') loadUpdate();
 }));
 
 // ---- status ----
@@ -175,12 +301,23 @@ async function refreshStatus() {
   if (!ok) return;
   const active = data.active;
   const dot = $('#dot'), pillText = $('#pillText');
-  dot.className = 'dot ' + (active === 'active' ? 'on' : active === 'activating' ? 'act' : 'idle');
-  pillText.textContent = active === 'active' ? 'no ar' : active === 'activating' ? 'iniciando…' : 'desligado';
-  $('#svcState').textContent = active === 'active' ? 'No ar' : active === 'activating' ? 'Iniciando…' : 'Desligado';
+  // active = RCON respondendo; activating = processo de pé mas ainda sem "Done";
+  // stalled = de pé há muito tempo sem responder (quase sempre RAM/swap)
+  const st = {
+    active: ['on', 'no ar', 'No ar'],
+    activating: ['act', 'iniciando…', 'Iniciando…'],
+    deactivating: ['act', 'desligando…', 'Desligando…'],
+    stalled: ['off', 'sem resposta', 'Sem resposta'],
+  }[active] || ['idle', 'desligado', 'Desligado'];
+  dot.className = 'dot ' + st[0];
+  pillText.textContent = st[1];
+  $('#svcState').textContent = st[2];
   $('#svcMeta').textContent = active === 'active'
     ? `no ar há ${fmtDur(data.uptime)}${data.players ? ` · ${data.players.online} jogador(es)` : ' · sem jogadores'}`
-    : (active === 'activating' ? 'subindo o servidor…' : 'servidor desligado — clique em Ligar pra iniciar');
+    : active === 'activating' ? `subindo o servidor…${data.uptime ? ` (${fmtDur(data.uptime)})` : ''} — fica "No ar" quando ele terminar de carregar o mundo`
+    : active === 'deactivating' ? 'salvando o mundo e desligando — num HD isso pode levar alguns minutos'
+    : active === 'stalled' ? `o processo está rodando há ${fmtDur(data.uptime)} mas o servidor não responde — pode estar travado (falta de RAM/swap). Tente Reiniciar ou "Desligar tudo".`
+    : 'servidor desligado — clique em Ligar pra iniciar';
   $('#players').textContent = data.players ? `${data.players.online} / ${data.players.max}` : (active === 'active' ? '0 / ?' : '—');
 
   const s = data.system || {};
@@ -230,6 +367,24 @@ async function power(action, serverId) {
   setTimeout(() => { const m = $('#powerMsg'); if (m) m.textContent = ''; }, 6000);
 }
 $('#btnStart').addEventListener('click', () => power('start', currentServer));
+// parada de emergência: para todo minecraft@* rodando; se algum não sair, oferece SIGKILL
+async function stopAll(force) {
+  const r = await api('/api/servers/stop-all', { method: 'POST', body: JSON.stringify({ force: !!force }) });
+  const n = (r.data.stopped || []).length;
+  if (!r.ok) toast('Falha ao desligar: ' + (r.data.errors || []).map(e => `${e.id}: ${e.error}`).join(' · ').slice(0, 250), 'err');
+  else toast(n ? `${force ? 'Matando' : 'Desligando'} ${n} servidor(es): ${r.data.stopped.join(', ')}` : 'Nenhum servidor estava rodando.');
+  setTimeout(() => { loadServers(); refreshStatus(); }, 2000);
+  if (force || !n) return;
+  setTimeout(async () => {
+    const { ok, data } = await api('/api/servers');
+    if (!ok) return;
+    const left = (data.servers || []).filter(s => r.data.stopped.includes(s.id) && ['active', 'deactivating'].includes(s.active));
+    if (left.length && await confirmDialog(`${left.map(s => s.name).join(', ')} ainda não desligou depois de 3 minutos. Num HD, salvar o mundo pode demorar isso mesmo — se a máquina estiver respondendo, espere mais um pouco. Forçar agora (SIGKILL)? O que ainda não foi salvo se perde e o mundo pode corromper.`, { okText: 'Forçar', danger: true })) stopAll(true);
+  }, 180000);
+}
+$('#serversStopAll').addEventListener('click', async () => {
+  if (await confirmDialog('Desligar TODOS os servidores que estão rodando? Os jogadores serão desconectados e cada servidor salva o mundo antes de sair.', { okText: 'Desligar tudo', danger: true })) stopAll(false);
+});
 $('#btnRestart').addEventListener('click', () => power('restart', currentServer));
 $('#btnStop').addEventListener('click', async () => { if (await confirmDialog('Desligar o servidor? Jogadores serão desconectados.', { okText: 'Desligar', danger: true })) power('stop', currentServer); });
 
@@ -378,6 +533,78 @@ $('#userAddForm').addEventListener('submit', async (e) => {
   $('#uAddName').value = ''; $('#uAddPass').value = ''; $('#usersMsg').textContent = '';
   toast(data.firstUser ? 'Contas ativadas — você agora é admin.' : 'Usuário adicionado.');
   loadUsers();
+});
+
+// ---- envio manual de mods/plugins (.jar), por botão ou arrastando ----
+async function uploadMods(files) {
+  files = [...files].filter(f => f && f.name);
+  if (!files.length) return;
+  const msg = $('#uploadMsg');
+  let okN = 0, rep = 0; const errs = [];
+  for (const [i, f] of files.entries()) {
+    msg.textContent = `enviando ${i + 1}/${files.length}: ${f.name}…`;
+    try {
+      const q = `name=${encodeURIComponent(f.name)}` + (currentServer ? `&server=${encodeURIComponent(currentServer)}` : '');
+      const r = await fetch('/api/content/upload?' + q, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+      let d = {}; try { d = await r.json(); } catch {}
+      if (r.ok) { okN++; if (d.replaced) rep++; } else errs.push(d.error || `${f.name}: falha (${r.status})`);
+    } catch (e) { errs.push(`${f.name}: ${e.message}`); }
+  }
+  msg.textContent = '';
+  if (okN) toast(`${okN} arquivo(s) enviado(s)${rep ? ` (${rep} substituído(s))` : ''}. Reinicie o servidor pra carregar.`);
+  if (errs.length) toast(errs.join(' · '), 'err');
+  loadInstalled();
+}
+// zip com os mods pros amigos (a resposta é attachment: o navegador baixa sem sair da página)
+$('#downloadModsBtn').addEventListener('click', () => {
+  toast('Montando o zip dos mods… o download começa em instantes.');
+  location.href = '/api/content/download-all' + (currentServer ? '?server=' + encodeURIComponent(currentServer) : '');
+});
+$('#uploadModsIn').addEventListener('change', (e) => { uploadMods(e.target.files); e.target.value = ''; });
+{
+  const drop = $('#installedList');
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+    if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+    e.preventDefault(); drop.classList.add('dragging');
+  }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove('dragging')));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); uploadMods(e.dataTransfer.files); });
+}
+
+// ---- conector MCP (tokens pro Claude Code) ----
+function mcpUrl() { return `${location.protocol}//${location.host}/mcp`; }
+async function loadMcp() {
+  const card = $('#mcpCard'); if (!card) return;
+  const { ok, data } = await api('/api/mcp/tokens');
+  card.hidden = !ok;           // não-admin (403) ou painel sem MCP: esconde
+  if (!ok) return;
+  const box = $('#mcpList'); box.innerHTML = '';
+  if (!data.tokens.length) { box.innerHTML = '<div class="muted small">Nenhum token ainda.</div>'; return; }
+  data.tokens.forEach(t => {
+    const el = document.createElement('div'); el.className = 'inst-row';
+    const used = t.lastUsedAt ? 'usado ' + new Date(t.lastUsedAt).toLocaleString('pt-BR') : 'nunca usado';
+    el.innerHTML = `<div class="inst-meta"><div class="inst-title">${esc(t.name)}</div><div class="muted small">de ${esc(t.user)} · criado ${new Date(t.createdAt).toLocaleDateString('pt-BR')} · ${used}</div></div>
+      <div class="inst-actions"><button class="danger sm">Revogar</button></div>`;
+    el.querySelector('button').onclick = async () => {
+      if (!await confirmDialog(`Revogar o token "${t.name}"? Quem estiver usando perde o acesso na hora.`, { okText: 'Revogar', danger: true })) return;
+      const r = await api('/api/mcp/tokens?id=' + encodeURIComponent(t.id), { method: 'DELETE' });
+      if (!r.ok) return toast(r.data.error || 'erro', 'err');
+      toast('Token revogado.'); loadMcp();
+    };
+    box.append(el);
+  });
+}
+$('#mcpForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const { ok, data } = await api('/api/mcp/tokens', { method: 'POST', body: JSON.stringify({ name: $('#mcpName').value.trim() }) });
+  if (!ok) return toast(data.error || 'erro', 'err');
+  $('#mcpName').value = '';
+  $('#mcpCmd').textContent = `claude mcp add --transport http --scope user craftbox ${mcpUrl()} --header "Authorization: Bearer ${data.token}"`;
+  $('#mcpNew').hidden = false;
+  loadMcp();
+});
+$('#mcpCopy').addEventListener('click', () => {
+  copyText($('#mcpCmd').textContent).then(ok => toast(ok ? 'Comando copiado.' : 'Não deu pra copiar — selecione e use Ctrl+C.', ok ? undefined : 'err'));
 });
 
 // ---- console (log ao vivo + comandos RCON, mesma tela, por servidor ativo) ----
@@ -550,6 +777,7 @@ function promptDialog(message, def = '') {
 async function loadContentInfo() {
   const { data } = await api('/api/content/info');
   $('#contentInfo').textContent = `${data.loader || '?'} · ${data.kind || ''} · MC ${data.mcVersion || '?'}`;
+  $('#downloadModsBtn').hidden = data.kind !== 'mods';   // Paper (plugins): jogador não precisa de nada
   $('#offlineToggle').checked = data.onlineMode === false;
   renderChips();
   doSearch();
@@ -948,6 +1176,8 @@ function intgPill(on) { return `<span class="status-pill"><span class="dot ${on 
 async function intgAction(name, action) { return api('/api/integrations/' + action, { method: 'POST', body: JSON.stringify({ name }) }); }
 async function loadIntegrations() { const { ok, data } = await api('/api/integrations'); if (ok) renderIntegrations(data); }
 function renderIntegrations(d) {
+  netAddr.ts = (d.tailscale && d.tailscale.running && d.tailscale.ip) || '';
+  renderJoin(); renderServersOverview(lastServers);
   const box = $('#intgList'); if (!box) return; box.innerHTML = '';
   const srv = d.server;
   if (srv) {
@@ -993,7 +1223,7 @@ function renderIntegrations(d) {
     let body = '';
     if (!t.installed) body = `<div class="intg-note">Precisa instalar no sistema (root): <code>sudo dnf install tailscale && sudo systemctl enable --now tailscaled</code></div>`;
     else if (!t.running) body = `<button class="ok sm act" data-a="start">Conectar (login)</button><div class="muted small" style="margin-top:.4rem">Se pedir permissão, rode uma vez <code>sudo tailscale up</code>.</div>`;
-    else body = `<div class="intg-note ok">Conectado. IP Tailscale: <code>${esc(t.ip || '?')}</code> — amigos na sua rede Tailscale entram por <code>${esc(t.ip || 'IP')}:PORTA</code>.</div><div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desconectar</button></div><div class="muted small" style="margin-top:.4rem">Se o botão der erro de permissão, rode uma vez: <code>sudo tailscale set --operator=$USER</code></div>`;
+    else body = `<div class="intg-note ok">Conectado. IP Tailscale: <code>${esc(t.ip || '?')}</code> — quem está na sua rede Tailscale entra pelos endereços abaixo (clique pra copiar).</div><div id="tsServers"></div><div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desconectar</button></div><div class="muted small" style="margin-top:.4rem">Se o botão der erro de permissão, rode uma vez: <code>sudo tailscale set --operator=$USER</code></div>`;
     el.innerHTML = `<div class="intg-head"><div class="intg-ic"><img src="/logos/tailscale.svg" alt=""></div><div class="intg-meta"><div class="intg-title">Tailscale</div><div class="muted small">VPN privada: só quem você convidar acessa. Ótimo pra jogar entre amigos.</div></div>${intgPill(t.running)}</div><div class="intg-body">${body}</div>`;
     el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {
       const a = ev.currentTarget.dataset.a; ev.currentTarget.disabled = true;
@@ -1003,6 +1233,7 @@ function renderIntegrations(d) {
       setTimeout(loadIntegrations, 900);
     });
     box.append(el);
+    renderTsServers();
   }
 
   // ---- cloudflare ----
@@ -1035,6 +1266,8 @@ async function loadNet() {
   const box = $('#netStatus'), wbox = $('#netWifi'); if (!box) return;
   const { ok, data } = await api('/api/net');
   if (!ok) { box.textContent = 'não consegui ler a rede.'; wbox.innerHTML = ''; return; }
+  netAddr.lan = String(data.ip || '').split(/[\s,]+/)[0] || '';
+  renderJoin(); renderServersOverview(lastServers);
   const parts = [data.ip ? `IP: <code>${esc(data.ip)}</code>` : 'sem IP'];
   if (data.ssid) parts.push(`Wi-Fi: <b>${esc(data.ssid)}</b>`);
   parts.push(`internet: ${esc(data.connectivity || '?')}`);
