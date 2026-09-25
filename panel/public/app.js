@@ -160,23 +160,36 @@ async function loadServers() {
     consoleSrv(cur ? cur.name : currentServer);
   } else currentServer = '';
   lastServers = data.servers || [];
+  noServers = !!data.multi && !lastServers.length;
   const curSrv = lastServers.find(s => s.id === currentServer) || lastServers[0];
   applyLoaderUi(curSrv && curSrv.loader);
   renderServersOverview(data.servers);
   renderJoin();
 }
-// Pumpkin não tem loja (mods/plugins) nem server.properties nem modo offline/Bedrock via plugin
+// abas que dependem do servidor selecionado. Pumpkin não tem loja (mods/plugins),
+// server.properties nem modo offline/Bedrock via plugin; sem nenhum servidor
+// (instalação "Nenhum agora") some tudo que age num servidor.
+let noServers = false;
 function applyLoaderUi(loader) {
   const pk = loader === 'pumpkin';
-  ['conteudo', 'compat'].forEach(t => {
+  const hide = { conteudo: pk || noServers, compat: pk || noServers, console: noServers, backups: noServers };
+  Object.entries(hide).forEach(([t, h]) => {
     const b = document.querySelector(`.tab[data-tab="${t}"]`);
     if (!b) return;
-    b.hidden = pk;
-    if (pk && b.classList.contains('active')) { const p = document.querySelector('.tab[data-tab="painel"]'); if (p) p.click(); }
+    b.hidden = h;
+    if (h && b.classList.contains('active')) { const p = document.querySelector('.tab[data-tab="painel"]'); if (p) p.click(); }
   });
   const pc = $('#propsCard'), note = $('#pumpkinCfgNote');
-  if (pc) pc.hidden = pk;
+  if (pc) pc.hidden = pk || noServers;
   if (note) note.hidden = !pk;
+  ['#btnStart', '#btnRestart', '#btnStop'].forEach(id => { const b = $(id); if (b) b.hidden = noServers; });
+  const cf = $('#btnCreateFirst'); if (cf) cf.hidden = !noServers;
+  if (noServers) {
+    $('#svcState').textContent = 'Nenhum servidor ainda';
+    $('#svcMeta').textContent = 'Crie o primeiro: Paper, Fabric, Forge, NeoForge ou um modpack (aba Modpacks). Nada é baixado até você criar.';
+    const d = $('#dot'); if (d) d.className = 'dot idle';
+    const pt = $('#pillText'); if (pt) pt.textContent = 'sem servidor';
+  }
 }
 function serverPower(id, action) { return api('/api/servers/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: JSON.stringify({}) }); }
 function renderServersOverview(servers) {
@@ -301,6 +314,7 @@ async function refreshStatus() {
   if (!ok) return;
   const active = data.active;
   const dot = $('#dot'), pillText = $('#pillText');
+  if (!noServers) {
   // active = RCON respondendo; activating = processo de pé mas ainda sem "Done";
   // stalled = de pé há muito tempo sem responder (quase sempre RAM/swap)
   const st = {
@@ -318,6 +332,7 @@ async function refreshStatus() {
     : active === 'deactivating' ? 'salvando o mundo e desligando — num HD isso pode levar alguns minutos'
     : active === 'stalled' ? `o processo está rodando há ${fmtDur(data.uptime)} mas o servidor não responde — pode estar travado (falta de RAM/swap). Tente Reiniciar ou "Desligar tudo".`
     : 'servidor desligado — clique em Ligar pra iniciar';
+  }
   $('#players').textContent = data.players ? `${data.players.online} / ${data.players.max}` : (active === 'active' ? '0 / ?' : '—');
 
   const s = data.system || {};
@@ -982,6 +997,7 @@ $('#authBtn').addEventListener('click', async () => {
 $('#serverSelect').addEventListener('change', (e) => switchServer(e.target.value));
 $('#serverManage').addEventListener('click', () => { $('#srvOverlay').hidden = false; renderServerManager(); });
 $('#serversManage').addEventListener('click', () => { $('#srvOverlay').hidden = false; renderServerManager(); });
+$('#btnCreateFirst').addEventListener('click', () => { $('#srvOverlay').hidden = false; renderServerManager(); });
 const ts = $('#tabServers'); if (ts) ts.addEventListener('click', loadServers);
 $('#srvClose').addEventListener('click', () => $('#srvOverlay').hidden = true);
 $('#srvOverlay').addEventListener('click', (e) => { if (e.target === $('#srvOverlay')) $('#srvOverlay').hidden = true; });

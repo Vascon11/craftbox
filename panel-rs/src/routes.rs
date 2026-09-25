@@ -194,6 +194,15 @@ fn update_running() -> bool {
     matches!(jsutil::trim(&r.stdout), "active" | "activating")
 }
 
+/// Rotas que leem/alteram a instância selecionada (ver guarda de "nenhum servidor").
+fn acts_on_server(p: &str, m: &str) -> bool {
+    let write = m != "GET";
+    matches!(p, "/api/power" | "/api/rcon" | "/api/content/install" | "/api/content/upload" | "/api/content/toggle"
+        | "/api/modpacks/manual-upload" | "/api/backups/restore")
+        || p.starts_with("/api/compat/")
+        || (write && matches!(p, "/api/properties" | "/api/backups" | "/api/content/installed"))
+}
+
 /// Depois disso sem o RCON responder, "iniciando" vira "sem resposta".
 const STALL_SECS: f64 = 15.0 * 60.0;
 
@@ -293,6 +302,13 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
     }
     if !auth::is_authed(cfg, cookie) {
         return Ok(err(401, "nao autenticado"));
+    }
+
+    // sem nenhum servidor criado (instalação "Nenhum agora"), o contexto cai num id
+    // fantasma ("default"): ligar, instalar plugin etc. criariam uma pasta que depois
+    // apareceria como servidor. Recusa tudo que age num servidor até existir um.
+    if ctx::multi_enabled(cfg) && ctx::list_instance_ids(cfg).is_empty() && acts_on_server(p, m) {
+        return Ok(err(409, "nenhum servidor criado ainda: crie o primeiro na aba Servidores (ou em Modpacks)"));
     }
 
     // ================= painel e servidor =================

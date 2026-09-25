@@ -31,7 +31,7 @@ STATIC_IF=""; STATIC_ADDR=""; STATIC_GW=""; STATIC_DNS="1.1.1.1,8.8.8.8"
 DISK=""; P1=""; P2=""
 FULLNAME=""; SRV_HOST="craftbox"; USERNAME=""; USERPW=""
 SSH_KEYS=""; SSH_PWAUTH=true
-MCTYPE=paper; MCVER=""; SRVNAME="Principal"; MC_MOTD="Um servidor craftbox"; MC_MAXP=8; MC_DIFF=normal
+MCTYPE=nenhum; MCVER=""; SRVNAME="Principal"; MC_MOTD="Um servidor craftbox"; MC_MAXP=8; MC_DIFF=normal
 OPTIMIZE=true; EULA=false
 PANELPW=""; PANEL_SAME=true
 
@@ -506,11 +506,13 @@ mc_type() {
   local c
   c=$(D --title " Tipo de servidor " --no-tags --ok-label "Continuar" --cancel-label "Voltar" --default-item "$MCTYPE" --menu \
 "
-Qual servidor de Minecraft instalar primeiro?
+Criar um servidor de Minecraft já na instalação?
 
-Depois da instalação, o painel web cria outros servidores quando você
-quiser, inclusive \ZbForge\Zn, \ZbNeoForge\Zn e \Zbmodpacks\Zn do Modrinth/CurseForge.
+Não é obrigatório: escolhendo \ZbNenhum agora\Zn, só o sistema e o painel são
+instalados, sem baixar servidor nem gerar mundo. Pelo painel web você
+cria quantos quiser depois, inclusive \ZbForge\Zn, \ZbNeoForge\Zn e \Zbmodpacks\Zn.
 " 0 "$DW" 0 \
+    nenhum "Nenhum agora: crio pelo painel depois" \
     paper  "Paper: plugins, leve (recomendado para PC fraco)" \
     fabric "Fabric: mods (os jogadores instalam os mesmos mods)") || return 1
   [ "$c" != "$MCTYPE" ] && MCVER=""
@@ -561,12 +563,13 @@ mc_diff() {
 mc_opt() {
   local extra="" rc
   [ "$MCTYPE" = fabric ] && extra="$NL   • instala mods de performance (Lithium, FerriteCore, Krypton, C2ME)"
+  local vd="$NL   • diminui view/simulation distance (6/4 em vez de 10/10)"
+  [ "$MCTYPE" = nenhum ] && vd=""
   D --title " Otimizações " --yes-label "Otimizar" --extra-button --extra-label "Deixar padrão" --no-label "Voltar" \
     $($OPTIMIZE || echo --default-button extra) --yesno \
 "
 Recomendado para hardware fraco (notebook antigo, CPU dual-core):
-
-   • diminui view/simulation distance (6/4 em vez de 10/10)
+$vd
    • destrava CPUs Dell/Haswell presas em ~800 MHz (BD PROCHOT)$extra
 
 Se preferir, instalo o padrão e você ajusta pelo painel.
@@ -589,7 +592,19 @@ depois pelo painel).
   rc=$?
   case $rc in 0) EULA=true ;; 3) EULA=false ;; *) return 1 ;; esac
 }
-scr_minecraft() { bt "Minecraft"; wizard mc_type mc_version mc_details mc_diff mc_opt mc_eula; }
+# "Nenhum agora" pula versão/detalhes/dificuldade/EULA; "Voltar" na 1ª subetapa
+# volta pro tipo de servidor
+scr_minecraft() {
+  bt "Minecraft"
+  while :; do
+    mc_type || return 1
+    if [ "$MCTYPE" = nenhum ]; then
+      mc_opt && return 0
+    else
+      wizard mc_version mc_details mc_diff mc_opt mc_eula && return 0
+    fi
+  done
+}
 
 # ---------------------------------------------------------------------------
 # 8) Painel web
@@ -628,6 +643,10 @@ scr_summary() {
   [ -n "$WIFI_SSID" ] && net="$net, Wi-Fi \"$WIFI_SSID\""
   ssh="$(ssh_count) chave(s)"; if $SSH_PWAUTH; then ssh="$ssh, senha permitida"; else ssh="$ssh, senha bloqueada"; fi
   case "$MC_DIFF" in peaceful) diffpt="pacífico";; easy) diffpt="fácil";; hard) diffpt="difícil";; *) diffpt="normal";; esac
+  local srvl="Servidor:       $SRVNAME: $MCTYPE $MCVER, até $MC_MAXP jogadores, $diffpt
+  Memória Java:   $(heap_mb) MB (calculado pela RAM de $(human_ram))" eulal
+  eulal="$NL  EULA:           $($EULA && echo aceita || echo "não aceita (servidor fica parado)")"
+  if [ "$MCTYPE" = nenhum ]; then srvl="Servidor:       nenhum agora (crie pelo painel depois)"; eulal=""; fi
   D --title " Resumo da instalação " --yes-label "Instalar" --no-label "Voltar" --yesno \
 "
   Disco:          \Zb$DISK\Zn ($(lsblk -dno SIZE "$DISK" 2>/dev/null | tr -d ' ')), será apagado inteiro
@@ -635,10 +654,8 @@ scr_summary() {
   Rede:           $net
   Máquina:        $SRV_HOST   (usuário: $USERNAME)
   SSH:            $ssh
-  Servidor:       $SRVNAME: $MCTYPE $MCVER, até $MC_MAXP jogadores, $diffpt
-  Memória Java:   $(heap_mb) MB (calculado pela RAM de $(human_ram))
-  Otimizações:    $($OPTIMIZE && echo sim || echo não)
-  EULA:           $($EULA && echo aceita || echo "não aceita (servidor fica parado)")
+  $srvl
+  Otimizações:    $($OPTIMIZE && echo sim || echo não)$eulal
   Painel web:     porta 8080, $($PANEL_SAME && echo "mesma senha do usuário" || echo "senha própria")
 
 Revise e escolha \ZbInstalar\Zn. Ainda dá para voltar e mudar qualquer coisa.
@@ -716,6 +733,11 @@ do_install() {
   else info "aviso: swap não criado"; rm -f /mnt/swapfile; fi
 
   phase 3
+  SRVID=""
+  if [ "$MCTYPE" = nenhum ]; then
+    info "nenhum servidor inicial: crie pelo painel (nada foi baixado, nenhum mundo gerado)"
+    mkdir -p "/mnt$SDIR"
+  else
   SRVID=$(printf '%s' "$SRVNAME" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//;s/-*$//')
   [ -z "$SRVID" ] && SRVID=principal
   MCDIR=/mnt$SDIR/$SRVID
@@ -807,6 +829,7 @@ tar czf "backups/world-$ts.tar.gz" world world_nether world_the_end 2>/dev/null 
 ls -1t backups/world-*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm -f
 EOF
   chmod +x "$MCDIR/start.sh" "$MCDIR/backup.sh"
+  fi  # servidor inicial
 
   phase 4
   # rede: Wi-Fi e/ou IP fixo viram conexões do NetworkManager
@@ -836,14 +859,16 @@ EOF
   mkdir -p /mnt/etc/systemd/logind.conf.d
   printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' > /mnt/etc/systemd/logind.conf.d/lid.conf
 
+  local mid=${SRVID:-<nome>} srvline="servidor inicial: $SRVNAME · $MCTYPE" issue_srv="Servidor \"$SRVNAME\" ($MCTYPE) na porta 25565."
+  if [ -z "$SRVID" ]; then srvline="sem servidor ainda: crie pelo painel"; issue_srv="Nenhum servidor ainda: crie o primeiro pelo painel."; fi
   cat > /mnt/etc/motd <<EOF
 
-  craftbox — $SRV_HOST   (servidor inicial: $SRVNAME · $MCTYPE)
+  craftbox — $SRV_HOST   ($srvline)
   ------------------------------------------------------------
   painel web:  http://<ip-desta-maquina>:8080
-  status:      systemctl status minecraft@$SRVID
-  logs:        journalctl -u minecraft@$SRVID -f
-  reiniciar:   sudo systemctl restart minecraft@$SRVID
+  status:      systemctl status minecraft@$mid
+  logs:        journalctl -u minecraft@$mid -f
+  reiniciar:   sudo systemctl restart minecraft@$mid
   instancias:  /srv/minecraft/<nome>    (gerencie tudo pelo painel)
   painel:      /opt/craftbox-panel
 
@@ -858,7 +883,7 @@ EOF
    >> Painel web:   http://\\4:8080
    >> Entrar SSH:   ssh $USERNAME@\\4
 
-   Servidor "$SRVNAME" ($MCTYPE) na porta 25565.
+   $issue_srv
    Abra o painel no navegador pra gerenciar tudo.
 
 ISSUE
@@ -924,8 +949,7 @@ find /srv/minecraft -name '*.sh' -exec chmod +x {} +
 mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/minecraft
 
 systemctl enable NetworkManager sshd systemd-timesyncd
-systemctl enable minecraft@$SRVID
-systemctl enable mc-backup@$SRVID.timer
+$([ -n "$SRVID" ] && printf 'systemctl enable minecraft@%s mc-backup@%s.timer' "$SRVID" "$SRVID")
 [ -d /opt/craftbox-panel ] && systemctl enable craftbox-panel || true
 if [ "$OPTIMIZE" = "true" ] && [ -f /etc/systemd/system/craftbox-bdprochot.service ]; then
   systemctl enable craftbox-bdprochot || true
@@ -1018,11 +1042,14 @@ scr_done() {
   ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
   [ -n "$STATIC_ADDR" ] && ip=${STATIC_ADDR%/*}
   BT="craftbox $CB_VERSION  ·  Instalador      concluído"
+  local done_srv="O craftbox foi instalado. Ao reiniciar, o servidor \Zb$SRVNAME\Zn sobe
+sozinho na porta 25565."
+  [ "$MCTYPE" = nenhum ] && done_srv="O craftbox foi instalado, sem nenhum servidor ainda. Depois de
+reiniciar, abra o painel e crie o primeiro (Paper, Fabric, Forge, modpack...)."
   while :; do
     c=$(D --title " Instalação concluída! " --no-tags --no-cancel --ok-label "Selecionar" --menu \
 "
-O craftbox foi instalado. Ao reiniciar, o servidor \Zb$SRVNAME\Zn sobe
-sozinho na porta 25565.
+$done_srv
 
    Painel web:   \Zbhttp://${ip:-<ip-da-máquina>}:8080\Zn
    SSH:          ssh $USERNAME@${ip:-<ip-da-máquina>}

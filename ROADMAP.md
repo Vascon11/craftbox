@@ -70,6 +70,8 @@ Lista de coisas pra fazer depois. Marque com `[x]` conforme for concluindo.
 - [x] **Atualização da "distro" pelo GitHub** ✅ — `craftbox-update` + card **Atualização do craftbox** no painel (`GET/POST /api/system/update`, `GET /api/system/update/log`). O CI publica `craftbox-system-<tag>.tar.gz(.sha256)` em cada release; o updater confere o sha256, faz backup, aplica painel/scripts/units/sudoers (fonte única `usr/local/lib/craftbox/system.sh`, usada também pelo `mc-install`), roda `pacman -Syu` + pacotes do craftbox e reinicia só o painel, com rollback se ele não responder. Validado na VM com release falsa servida localmente: bootstrap de máquina antiga, update pelo painel, rollback de painel quebrado e recusa de sha256 errado.
   - [ ] Primeira release real com o pacote (`rc7`) e rodar o bootstrap no PC da 3060.
 
+- [x] **Instalar sem criar servidor** ✅ — a tela "Tipo de servidor" do instalador tem **Nenhum agora** (padrão): instala só sistema + painel, sem baixar servidor nem gerar mundo, e pula versão/detalhes/dificuldade/EULA. No 1º boot o painel mostra "Nenhum servidor ainda" com o botão **Criar o primeiro servidor** e esconde loja/compat/console/backups; as rotas que agem num servidor respondem 409 até existir um (antes caía num id fantasma `default`). Validado no `--dry-run` e no painel com `serversDir` vazio; falta uma instalação real em VM.
+
 ## Hardware (tarefas físicas)
 - [ ] Trocar a bateria **CR2032** (código de 5 beeps / RTC resetando pra 2013).
 - [ ] Resolver o **clock preso da CPU** (carregador/bateria principal — a CPU está travada perto do mínimo).
