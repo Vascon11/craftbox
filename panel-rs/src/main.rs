@@ -116,7 +116,22 @@ fn graceful_shutdown(st: &State) -> ! {
     std::process::exit(0);
 }
 
+/// Integrações (playit, cloudflared) rodam como `systemctl --user` do usuário do
+/// painel. Como serviço do sistema (User=minecraft) o painel nasce sem
+/// XDG_RUNTIME_DIR, e aí o systemctl --user não acha o bus ("$XDG_RUNTIME_DIR not
+/// defined"). O usuário tem linger, então /run/user/<uid> existe: aponta pra ele.
+fn ensure_runtime_dir() {
+    if std::env::var_os("XDG_RUNTIME_DIR").is_some() {
+        return;
+    }
+    let dir = format!("/run/user/{}", unsafe { libc::getuid() });
+    if std::path::Path::new(&dir).is_dir() {
+        std::env::set_var("XDG_RUNTIME_DIR", dir);
+    }
+}
+
 fn main() {
+    ensure_runtime_dir();
     let args: Vec<String> = std::env::args().collect();
     let root = exe_dir();
     let config_path = config::config_path(&root);

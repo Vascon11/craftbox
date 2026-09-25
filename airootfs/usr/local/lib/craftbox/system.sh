@@ -118,6 +118,7 @@ cb_write_sudoers() {
   cat > "$tmp" <<'SUDO'
 minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft@*, /usr/bin/systemctl stop minecraft@*, /usr/bin/systemctl restart minecraft@*
 minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl kill --signal=SIGKILL minecraft@*
+minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed minecraft@*
 minecraft ALL=(root) NOPASSWD: /usr/bin/tailscale up *, /usr/bin/tailscale down
 minecraft ALL=(root) NOPASSWD: /usr/bin/nmcli
 # atualização pelo painel: só checar, e disparar o updater fora do cgroup do painel

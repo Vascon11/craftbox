@@ -459,6 +459,15 @@ pub fn svc_action(exec_runner: bool, cfg: &Map, action: &str, service: &str) -> 
         return Ok(unit_action(cfg, action, service));
     }
     // rootless: systemctl --user <action> <svc> | sistema: sudoers permitindo systemctl <action> <svc>
+    // o StartLimitBurst da unit trava o servidor em "start-limit-hit" depois de 3
+    // quedas; um "Ligar" manual é decisão da pessoa, então destrava antes
+    if action != "stop" {
+        let _ = if config::systemctl_user(cfg) {
+            run("systemctl", &["--user", "reset-failed", service], RUN_TIMEOUT)
+        } else {
+            run("sudo", &["-n", "systemctl", "reset-failed", service], RUN_TIMEOUT)
+        };
+    }
     // stop sem bloquear: salvar o mundo leva minutos e o systemctl estouraria o
     // RUN_TIMEOUT; a UI acompanha pelo estado "deactivating"
     let mut args = vec![action, service];
