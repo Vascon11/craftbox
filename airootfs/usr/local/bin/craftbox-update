@@ -187,6 +187,8 @@ if $PKGS; then
   say "[4/5] pacotes do sistema (pacman -Syu)"
   if pacman -Syu --noconfirm --needed "${CB_PACKAGES[@]}"; then
     declare -F cb_java_default_newest >/dev/null && cb_java_default_newest
+    # daemon do Tailscale ligado (sem login ele fica parado; o painel faz o "tailscale up")
+    systemctl is-enabled tailscaled >/dev/null 2>&1 || systemctl enable --now tailscaled >/dev/null 2>&1 || true
     # kernel novo instalado ≠ kernel rodando → precisa reiniciar pra valer
     kpkg=$(pacman -Q linux 2>/dev/null | awk '{print $2}' | sed 's/\.arch/-arch/')
     [ -n "$kpkg" ] && [[ "$(uname -r)" != "$kpkg"* ]] && REBOOT=true

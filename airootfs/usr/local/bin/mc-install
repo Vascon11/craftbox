@@ -948,7 +948,7 @@ chown -R minecraft:minecraft /srv/minecraft
 find /srv/minecraft -name '*.sh' -exec chmod +x {} +
 mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/minecraft
 
-systemctl enable NetworkManager sshd systemd-timesyncd
+systemctl enable NetworkManager sshd systemd-timesyncd tailscaled
 $([ -n "$SRVID" ] && printf 'systemctl enable minecraft@%s mc-backup@%s.timer' "$SRVID" "$SRVID")
 [ -d /opt/craftbox-panel ] && systemctl enable craftbox-panel || true
 if [ "$OPTIMIZE" = "true" ] && [ -f /etc/systemd/system/craftbox-bdprochot.service ]; then

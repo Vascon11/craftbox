@@ -22,6 +22,7 @@ CB_PACKAGES=(
   jre-openjdk-headless jre21-openjdk-headless jre17-openjdk-headless jre8-openjdk-headless
   git tmux nano vim htop jq curl wget which unzip
   msr-tools
+  tailscale   # VPN entre amigos (o painel liga/desliga pelo sudoers)
 )
 
 # o `java` padrão é sempre a JDK mais nova instalada (as outras o painel chama pelo caminho)
