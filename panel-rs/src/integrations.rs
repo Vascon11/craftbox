@@ -1,7 +1,10 @@
 //! Integrações (playit / tailscale / cloudflare) e rede (nmcli), como no
 //! server.js. Os túneis rodam como serviços de usuário do systemd (ou pelo
-//! runner exec no container), um por servidor: o túnel liga EXATAMENTE a
-//! instância selecionada.
+//! runner exec no container). Os túneis são GLOBAIS (um só secret/token, um só
+//! serviço, um só endereço público) porque só um servidor roda por vez: trocar
+//! de servidor não exige túnel novo. O túnel encaminha pra uma porta local fixa
+//! (configurada no painel do playit/Cloudflare), então os servidores que
+//! usarem o túnel devem ficar na mesma `server-port`.
 
 use crate::config;
 use crate::ctx::{self, Srv};
@@ -61,24 +64,55 @@ pub fn u_journal(exec: bool, cfg: &Map, unit: &str, lines: usize) -> String {
     runner::run("journalctl", &["--user", "-u", unit, "-n", &n, "--no-pager", "-o", "cat"], RUN_TIMEOUT).stdout
 }
 
-/// `intgSrvDir()`: diretório de runtime da integração por servidor
-pub fn intg_srv_dir(cfg: &Map, s: &Srv) -> String {
+/// diretório de runtime das integrações (secret/token do túnel): compartilhado
+/// por todos os servidores. Adota os arquivos do antigo layout por servidor
+/// (`<integrações>/<id>/`) na primeira vez, pra não perder o túnel já configurado.
+pub fn intg_srv_dir(cfg: &Map, _s: &Srv) -> String {
     let base = integrations_dir(cfg);
-    if !ctx::multi_enabled(cfg) {
-        return base;
+    if ctx::multi_enabled(cfg) {
+        adopt_legacy_files(&base);
     }
-    let d = jsutil::path_join(&[&base, &s.id]);
-    let _ = std::fs::create_dir_all(&d);
-    d
+    base
 }
 
-pub fn intg_unit(cfg: &Map, s: &Srv, name: &str) -> Option<String> {
+fn adopt_legacy_files(base: &str) {
+    let Ok(rd) = std::fs::read_dir(base) else { return };
+    let mut subs: Vec<_> = rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.path()).collect();
+    subs.sort();
+    for f in ["playit.toml", "cloudflared.token", "cloudflared.host"] {
+        let dst = jsutil::path_join(&[base, f]);
+        if exists(&dst) {
+            continue;
+        }
+        if let Some(src) = subs.iter().map(|d| d.join(f)).find(|p| p.is_file()) {
+            if std::fs::copy(&src, &dst).is_ok() {
+                chmod(&dst, 0o600);
+            }
+        }
+    }
+}
+
+/// nome do serviço do túnel (único, não depende do servidor)
+pub fn intg_unit(_cfg: &Map, _s: &Srv, name: &str) -> Option<String> {
+    match name {
+        "playit" => Some("craftbox-playit".into()),
+        "cloudflare" => Some("craftbox-cloudflared".into()),
+        _ => None,
+    }
+}
+
+/// serviços por servidor do layout antigo (`craftbox-playit-<id>`): param,
+/// senão rodariam dois agentes com o mesmo secret
+fn stop_legacy_unit(exec: bool, cfg: &Map, s: &Srv, name: &str) {
     let base = match name {
         "playit" => "craftbox-playit",
         "cloudflare" => "craftbox-cloudflared",
-        _ => return None,
+        _ => return,
     };
-    Some(if ctx::multi_enabled(cfg) { format!("{}-{}", base, s.id) } else { base.into() })
+    let legacy = format!("{}-{}", base, s.id);
+    if u_active(exec, cfg, &legacy) == "active" {
+        u_svc(exec, cfg, "stop", &legacy);
+    }
 }
 
 fn exists(p: &str) -> bool {
@@ -97,14 +131,14 @@ pub fn maybe_start_tunnels(exec: bool, cfg: &Map, s: &Srv) {
     }
     let dir = intg_srv_dir(cfg, s);
     let idir = integrations_dir(cfg);
-    let name = s.name_str();
     if truthy(meta.get("playitOnStart")) {
         let bin = jsutil::path_join(&[&idir, "playit"]);
         let toml = jsutil::path_join(&[&dir, "playit.toml"]);
         if exists(&bin) && exists(&toml) {
             if let Some(u) = intg_unit(cfg, s, "playit") {
+                stop_legacy_unit(exec, cfg, s, "playit");
                 if u_active(exec, cfg, &u) != "active" {
-                    write_user_unit(&u, &format!("craftbox — playit.gg agent ({})", name), &playit_exec(&bin, &toml, &dir));
+                    write_user_unit(&u, "craftbox — playit.gg agent", &playit_exec(&bin, &toml, &dir));
                     runner::daemon_reload(exec);
                     u_svc(exec, cfg, "start", &u);
                 }
@@ -116,11 +150,12 @@ pub fn maybe_start_tunnels(exec: bool, cfg: &Map, s: &Srv) {
         let tok = jsutil::path_join(&[&dir, "cloudflared.token"]);
         if exists(&bin) && exists(&tok) {
             if let Some(u) = intg_unit(cfg, s, "cloudflare") {
+                stop_legacy_unit(exec, cfg, s, "cloudflare");
                 if u_active(exec, cfg, &u) != "active" {
                     if let Ok(t) = std::fs::read_to_string(&tok) {
                         write_user_unit(
                             &u,
-                            &format!("craftbox — Cloudflare Tunnel ({})", name),
+                            "craftbox — Cloudflare Tunnel",
                             &format!("{} tunnel --no-autoupdate run --token {}", bin, jsutil::trim(&t)),
                         );
                         runner::daemon_reload(exec);
@@ -201,7 +236,7 @@ pub fn integrations_status(exec: bool, cfg: &Map, s: &Srv) -> Value {
     let meta = ctx::read_instance_meta(&s.dir);
     let playit_bin = jsutil::path_join(&[&dir, "playit"]);
     let cf_bin = jsutil::path_join(&[&dir, "cloudflared"]);
-    // playit (daemon roda com um secret key criado no playit.gg — por servidor)
+    // playit (daemon roda com um secret key criado no playit.gg — global)
     let p_inst = exists(&playit_bin);
     let mut p_run = false;
     let mut p_addr = Value::Null;
@@ -286,7 +321,6 @@ pub fn integration_install(cfg: &Map, name: &str) -> Result<Value, String> {
 pub fn integration_start(exec: bool, cfg: &Map, s: &Srv, name: &str) -> Result<Value, String> {
     let dir = integrations_dir(cfg);
     let srv_dir = intg_srv_dir(cfg, s);
-    let sname = s.name_str();
     match name {
         "playit" => {
             let bin = jsutil::path_join(&[&dir, "playit"]);
@@ -295,10 +329,11 @@ pub fn integration_start(exec: bool, cfg: &Map, s: &Srv, name: &str) -> Result<V
                 return Err("playit não instalado".into());
             }
             if !exists(&toml) {
-                return Err(format!("cole o secret key do playit.gg primeiro (servidor {})", sname));
+                return Err("cole o secret key do playit.gg primeiro".to_string());
             }
             let u = intg_unit(cfg, s, "playit").unwrap();
-            write_user_unit(&u, &format!("craftbox — playit.gg agent ({})", sname), &playit_exec(&bin, &toml, &srv_dir));
+            stop_legacy_unit(exec, cfg, s, "playit");
+            write_user_unit(&u, "craftbox — playit.gg agent", &playit_exec(&bin, &toml, &srv_dir));
             runner::daemon_reload(exec);
             let r = u_svc(exec, cfg, "start", &u);
             if r.code != 0 {
@@ -313,13 +348,14 @@ pub fn integration_start(exec: bool, cfg: &Map, s: &Srv, name: &str) -> Result<V
                 return Err("cloudflared não instalado".into());
             }
             if !exists(&tok) {
-                return Err(format!("configure o token do túnel Cloudflare primeiro (servidor {})", sname));
+                return Err("configure o token do túnel Cloudflare primeiro".to_string());
             }
             let token = std::fs::read_to_string(&tok).map_err(|e| jsutil::fs_err(&e, "open", &tok))?;
             let u = intg_unit(cfg, s, "cloudflare").unwrap();
+            stop_legacy_unit(exec, cfg, s, "cloudflare");
             write_user_unit(
                 &u,
-                &format!("craftbox — Cloudflare Tunnel ({})", sname),
+                "craftbox — Cloudflare Tunnel",
                 &format!("{} tunnel --no-autoupdate run --token {}", bin, jsutil::trim(&token)),
             );
             runner::daemon_reload(exec);
