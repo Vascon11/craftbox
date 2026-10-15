@@ -345,6 +345,15 @@
 
       <!-- ============ COMPATIBILIDADE ============ -->
       <section id="compat" class="panel" hidden>
+        <div class="card" id="wlCard">
+          <h3>Whitelist (quem pode entrar)</h3>
+          <p class="muted small" style="margin-top:.6rem">Só os nicks da lista entram; qualquer outro é barrado. Em servidor <b>pirata</b> (offline) é a principal proteção contra desconhecidos. O painel grava o UUID certo pro modo do servidor (o <code>whitelist add</code> do Minecraft erra isso em offline).</p>
+          <label class="switch"><input type="checkbox" id="wlToggle"><span>Whitelist ativada</span></label>
+          <div class="row" style="margin-top:.7rem"><input id="wlName" placeholder="nick do jogador" maxlength="16" style="flex:1"><button id="wlAdd" class="ok">Adicionar</button></div>
+          <div id="wlFix" class="intg-note warn small" hidden style="margin-top:.6rem"></div>
+          <div id="wlList" style="margin-top:.7rem"></div>
+          <div id="wlMsg" class="muted small" style="margin-top:.4rem"></div>
+        </div>
         <div class="card">
           <h3>Minecraft "pirata" (modo offline)</h3>
           <p class="muted small" style="margin-top:.6rem">Permite amigos <b>sem conta premium</b> entrarem. ⚠ Desliga a verificação de conta: qualquer um pode usar qualquer nick e o servidor fica mais exposto. Use só em rede privada / Tailscale.</p>

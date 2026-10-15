@@ -777,7 +777,8 @@ pub fn list_servers_detailed(st: &State, cfg: &Map, active_id: &str) -> Value {
     let mut servers = Vec::new();
     for id in ctx::list_instance_ids(cfg) {
         let c: Srv = ctx::server_ctx(cfg, &id);
-        let active = runner::svc_active_of(st.exec_runner, cfg, &c.service);
+        // mesmo estado do /api/status: 'active' só com o RCON respondendo; senão activating/stalled
+        let (active, _, _) = crate::routes::live_state(st.exec_runner, cfg, &c);
         let manual = ctx::read_instance_meta(&c.dir).get("manualMods").filter(|x| truthy(Some(x))).cloned();
         servers.push(obj! {
             "id" => id.clone(), "name" => c.name.clone(), "loader" => loader_of(&c.dir, &c.loader),

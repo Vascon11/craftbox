@@ -34,7 +34,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
 $('#logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }); location.reload(); });
 
 async function showApp() { $('#app').hidden = false; await loadServers(); reloadAll(); }
-function reloadAll() { loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); loadMcp(); loadNet(); measureWorld(); }
+function reloadAll() { loadWhitelist(); loadProps(); startStatus(); startLogs(); loadBackups(); loadContentInfo(); loadInstalled(); loadIntegrations(); loadAudit(); loadUsers(); loadMcp(); loadNet(); measureWorld(); }
 
 // ---- atualização do sistema (craftbox-update) ----
 let updTimer;
@@ -113,17 +113,29 @@ function addrRows(port) {
   if (netAddr.ts) rows.push(`<div class="join-row"><span class="lbl">Tailscale (VPN)</span>${addrChip(netAddr.ts, port)}</div>`);
   return rows.join('') || `<div class="muted small">porta ${esc(port)} — não consegui descobrir o IP desta máquina.</div>`;
 }
+// estados do systemd/RCON: active = no ar; activating = subindo; deactivating = salvando/desligando;
+// stalled = processo de pé sem responder. 'alive' = tem processo (não dá pra ligar outro por cima)
+const SRV_STATE = {
+  active: { cls: 'on', txt: 'no ar', dot: '🟢' },
+  activating: { cls: 'act', txt: 'iniciando…', dot: '🟡' },
+  deactivating: { cls: 'act', txt: 'desligando…', dot: '🟠' },
+  stalled: { cls: 'off', txt: 'sem resposta', dot: '🔴' },
+};
+const srvAlive = (s) => !!SRV_STATE[s && s.active];
 function renderJoin() {
   const box = $('#joinBox'); if (!box) return;
   const servers = lastServers || [];
   const cur = servers.find(s => s.selected) || servers.find(s => s.id === currentServer) || servers[0];
   if (!cur || !cur.port) { box.hidden = true; return; }
   const on = cur.active === 'active';
-  const others = servers.filter(s => s.active === 'active' && s.id !== cur.id);
+  const others = servers.filter(s => srvAlive(s) && s.id !== cur.id);
   let html;
   if (on) html = `<div class="join-title">🟢 Pra entrar em <b>${esc(cur.name)}</b>, use no Minecraft:</div>${addrRows(cur.port)}`;
+  else if (cur.active === 'activating') html = `<div class="join-title">🟡 <b>${esc(cur.name)}</b> está iniciando — ainda não dá pra entrar.</div><div class="muted small">Quando terminar de carregar o mundo, o endereço vai ser:</div>${addrRows(cur.port)}`;
+  else if (cur.active === 'deactivating') html = `<div class="join-title">🟠 <b>${esc(cur.name)}</b> está desligando — salvando o mundo.</div>`;
+  else if (cur.active === 'stalled') html = `<div class="join-title">🔴 <b>${esc(cur.name)}</b> não está respondendo — pode estar travado.</div>`;
   else html = `<div class="join-title">⚪ <b>${esc(cur.name)}</b> está desligado — ligue antes de entrar.</div><div class="muted small">Quando ligar, o endereço vai ser:</div>${addrRows(cur.port)}`;
-  if (others.length) html += `<div class="intg-note warn small" style="margin-top:.5rem">No ar agora: ${others.map(o => `<b>${esc(o.name)}</b> na porta <b>${esc(o.port)}</b>`).join(', ')} — é nessa porta que dá pra entrar.</div>`;
+  if (others.length) html += `<div class="intg-note warn small" style="margin-top:.5rem">Já rodando: ${others.map(o => `<b>${esc(o.name)}</b> (${SRV_STATE[o.active].txt.replace('…', '')}) na porta <b>${esc(o.port)}</b>`).join(', ')}.</div>`;
   box.innerHTML = html;
   box.classList.toggle('on', on);
   box.hidden = false;
@@ -152,7 +164,7 @@ async function loadServers() {
     currentServer = data.activeId || (data.servers[0] && data.servers[0].id) || '';
     const sel = $('#serverSelect'); sel.innerHTML = '';
     data.servers.forEach(s => {
-      const label = `${s.name} · ${s.loader}${s.mcVersion ? ' ' + s.mcVersion : ''}${s.active === 'active' ? ' 🟢' : ''}`;
+      const label = `${s.name} · ${s.loader}${s.mcVersion ? ' ' + s.mcVersion : ''}${srvAlive(s) ? ' ' + SRV_STATE[s.active].dot : ''}`;
       const o = new Option(label, s.id); sel.add(o);
     });
     sel.value = currentServer;
@@ -194,32 +206,32 @@ function applyLoaderUi(loader) {
 function serverPower(id, action) { return api('/api/servers/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body: JSON.stringify({}) }); }
 function renderServersOverview(servers) {
   const box = $('#serversGrid'); if (!box) return; box.innerHTML = '';
-  const runningAny = (servers || []).find(s => s.active === 'active');
+  const runningAny = (servers || []).find(srvAlive);
   const hint = $('#serversHint');
   if (hint) {
     hint.innerHTML = runningAny
-      ? `<b>⚠</b> "Instâncias disponíveis. Por limitações de hardware, execute apenas um servidor por vez. Clique em \"Selecionar\" para gerenciar no painel acima."<br><span style="color:var(--danger,#e0604a)">Já tem <b>${esc(runningAny.name)}</b> no ar — ligar outro pode travar o hardware.</span>`
+      ? `Instâncias disponíveis. Por limitações de hardware, execute apenas um servidor por vez. Clique em "Selecionar" para gerenciar no painel acima.<br><span style="color:var(--danger,#e0604a)">⚠ <b>${esc(runningAny.name)}</b> ${SRV_STATE[runningAny.active].txt.replace('…', '')} — ligar outro pode travar o hardware.</span>`
       : 'Instâncias disponíveis. Por limitações de hardware, execute apenas um servidor por vez. Clique em "Selecionar" para gerenciar no painel acima.';
   }
   servers.forEach(s => {
-    const running = s.active === 'active';
+    const running = srvAlive(s), stt = SRV_STATE[s.active] || { cls: 'idle', txt: 'desligado' };
     const el = document.createElement('div'); el.className = 'store-card';
     el.innerHTML = `
       <div class="store-top" style="justify-content:space-between">
         <div class="store-title">${esc(s.name)}</div>
-        <span class="status-pill"><span class="dot ${running ? 'on' : 'idle'}"></span>${running ? 'no ar' : 'desligado'}</span>
+        <span class="status-pill"><span class="dot ${stt.cls}"></span>${stt.txt}</span>
       </div>
       <div class="muted small">${esc(s.loader)}${s.mcVersion ? ' ' + esc(s.mcVersion) : ''} · porta ${s.port || '?'}${s.selected ? ' · <b>selecionado</b>' : ''}${s.modpack ? ' · 📦 modpack' : ''}</div>
-      ${running && s.port ? `<div class="join-row" style="margin-top:.45rem">${addrChip(netAddr.lan, s.port)}${addrChip(netAddr.ts, s.port)}</div>` : ''}
+      ${s.active === 'active' && s.port ? `<div class="join-row" style="margin-top:.45rem">${addrChip(netAddr.lan, s.port)}${addrChip(netAddr.ts, s.port)}</div>` : ''}
       <div class="store-foot">
         <button class="ghost sm act-sel">Selecionar</button><span class="grow"></span>
-        ${running ? '<button class="danger sm act-stop">Desligar</button>' : '<button class="ok sm act-start">Ligar</button>'}
+        ${s.active === 'deactivating' ? '<button class="danger sm" disabled>Desligando…</button>' : running ? '<button class="danger sm act-stop">Desligar</button>' : '<button class="ok sm act-start">Ligar</button>'}
       </div>`;
     el.querySelector('.act-sel').onclick = () => { switchServer(s.id); const t = document.querySelector('.tab[data-tab="painel"]'); if (t) t.click(); };
     const st = el.querySelector('.act-start');
     if (st) st.onclick = async (ev) => {
-      const other = (servers || []).find(x => x.active === 'active' && x.id !== s.id);
-      if (other && !await confirmDialog('Já tem "' + other.name + '" no ar. Ligar "' + s.name + '" agora pode travar o hardware. Continuar?', { okText: 'Ligar mesmo assim', danger: true })) return;
+      const other = (servers || []).find(x => srvAlive(x) && x.id !== s.id);
+      if (other && !await confirmDialog('Já tem "' + other.name + '" rodando. Ligar "' + s.name + '" agora pode travar o hardware. Continuar?', { okText: 'Ligar mesmo assim', danger: true })) return;
       ev.currentTarget.disabled = true; await serverPower(s.id, 'start'); toast('Ligando ' + s.name + '…'); setTimeout(loadServers, 2500);
     };
     const sp = el.querySelector('.act-stop');
@@ -299,12 +311,14 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
   t.classList.add('active');
   document.querySelectorAll('.panel').forEach(p => p.hidden = true);
   $('#' + t.dataset.tab).hidden = false;
+  window.scrollTo(0, 0); const mn = document.querySelector('main'); if (mn) mn.scrollTop = 0;
   if (t.dataset.tab === 'modpacks' && !$('#mpResults').children.length) doMpSearch(0);
   if (t.dataset.tab === 'painel') loadServers();
   if (t.dataset.tab === 'conteudo') { loadContentInfo(); loadInstalled(); }
   if (t.dataset.tab === 'console') refreshLogs(true);
   if (t.dataset.tab === 'integra') loadIntegrations();
   if (t.dataset.tab === 'config') loadUpdate();
+  if (t.dataset.tab === 'compat') loadWhitelist();
 }));
 
 // ---- status ----
@@ -314,6 +328,9 @@ async function refreshStatus() {
   if (!ok) return;
   const active = data.active;
   const dot = $('#dot'), pillText = $('#pillText');
+  // lista de servidores (cards, caixa de endereço, seletor) acompanha o estado do selecionado sem esperar o próximo reload
+  const cs = (lastServers || []).find(s => s.id === currentServer);
+  if (cs && cs.active !== active) { cs.active = active; loadServers(); }
   if (!noServers) {
   // active = RCON respondendo; activating = processo de pé mas ainda sem "Done";
   // stalled = de pé há muito tempo sem responder (quase sempre RAM/swap)
@@ -333,6 +350,14 @@ async function refreshStatus() {
     : active === 'stalled' ? `o processo está rodando há ${fmtDur(data.uptime)} mas o servidor não responde — pode estar travado (falta de RAM/swap). Tente Reiniciar ou "Desligar tudo".`
     : 'servidor desligado — clique em Ligar pra iniciar';
   }
+  if (!noServers) {
+    const alive = active in SRV_STATE, busy = !!document.querySelector('#painel .power-busy');
+    if (!busy) {
+      $('#btnStart').disabled = alive;
+      $('#btnRestart').disabled = !alive || active === 'deactivating';
+      $('#btnStop').disabled = !alive;
+    }
+  }
   $('#players').textContent = data.players ? `${data.players.online} / ${data.players.max}` : (active === 'active' ? '0 / ?' : '—');
 
   const s = data.system || {};
@@ -340,7 +365,9 @@ async function refreshStatus() {
     $('#cpuFreq').textContent = s.cpu.curMHz ?? '—';
     $('#cpuMeta').textContent = `máx ${s.cpu.maxMHz ?? '?'} MHz · ${s.cpus} threads · load ${s.load ? s.load[0] : '—'}`;
     const warn = $('#cpuWarn');
-    if (s.cpu.curMHz && s.cpu.maxMHz && s.cpu.curMHz < s.cpu.maxMHz * 0.45) {
+    // ocioso o governor baixa a frequência de propósito: só avisa se há carga de verdade e a CPU não sobe
+    const busy = s.load && s.cpus && s.load[0] >= s.cpus * 0.5;
+    if (busy && s.cpu.curMHz && s.cpu.maxMHz && s.cpu.curMHz < s.cpu.maxMHz * 0.45) {
       warn.hidden = false; warn.textContent = '⚠ CPU parece presa perto do mínimo (verifique carregador/bateria).';
     } else warn.hidden = true;
   }
@@ -373,12 +400,13 @@ async function power(action, serverId) {
   const labels = { start: 'ligando', restart: 'reiniciando', stop: 'desligando' };
   const target = serverId || currentServer;
   document.querySelectorAll('#painel button').forEach(b => b.disabled = true);
+  document.querySelector('#painel').classList.add('power-busy');
   msg.textContent = (labels[action] || 'executando') + '…';
   const { ok, data } = await serverPower(target, action);
   msg.textContent = ok
     ? `✓ comando de ${labels[action] || action} enviado para ${target} — acompanhe o estado acima`
     : ('erro: ' + (data.output || data.error || '')).slice(0, 200);
-  setTimeout(() => { document.querySelectorAll('#painel button').forEach(b => b.disabled = false); refreshStatus(); }, 1500);
+  setTimeout(() => { document.querySelectorAll('#painel button').forEach(b => b.disabled = false); document.querySelector('#painel').classList.remove('power-busy'); refreshStatus(); }, 1500);
   setTimeout(() => { const m = $('#powerMsg'); if (m) m.textContent = ''; }, 6000);
 }
 $('#btnStart').addEventListener('click', () => power('start', currentServer));
@@ -400,7 +428,7 @@ async function stopAll(force) {
 $('#serversStopAll').addEventListener('click', async () => {
   if (await confirmDialog('Desligar TODOS os servidores que estão rodando? Os jogadores serão desconectados e cada servidor salva o mundo antes de sair.', { okText: 'Desligar tudo', danger: true })) stopAll(false);
 });
-$('#btnRestart').addEventListener('click', () => power('restart', currentServer));
+$('#btnRestart').addEventListener('click', async () => { if (await confirmDialog('Reiniciar o servidor? Jogadores serão desconectados.', { okText: 'Reiniciar', danger: true })) power('restart', currentServer); });
 $('#btnStop').addEventListener('click', async () => { if (await confirmDialog('Desligar o servidor? Jogadores serão desconectados.', { okText: 'Desligar', danger: true })) power('stop', currentServer); });
 
 let serversPolling = false;
@@ -970,10 +998,53 @@ $('#updateCheck').addEventListener('click', async () => {
 });
 
 // ---- compatibilidade ----
+// ---- whitelist ----
+let wlBusy = false;
+async function loadWhitelist() {
+  const box = $('#wlList'); if (!box || noServers) return;
+  const { ok, data } = await api('/api/whitelist');
+  if (!ok) { box.textContent = data.error || 'não consegui ler a whitelist.'; return; }
+  $('#wlToggle').checked = !!data.enabled;
+  const bad = data.players.filter(p => p.offlineMismatch);
+  const fx = $('#wlFix');
+  fx.hidden = !bad.length;
+  if (bad.length) fx.innerHTML = `⚠ ${bad.length} jogador(es) com UUID da conta original num servidor offline (${bad.map(p => esc(p.name)).join(', ')}): eles <b>não conseguem entrar</b>. <button class="ghost sm" id="wlFixBtn">Corrigir UUIDs</button>`;
+  const fb = $('#wlFixBtn');
+  if (fb) fb.onclick = async () => { const r = await api('/api/whitelist/fix', { method: 'POST', body: '{}' }); toast(r.ok ? `${r.data.fixed} UUID(s) corrigido(s).` : (r.data.error || 'erro'), r.ok ? undefined : 'err'); loadWhitelist(); };
+  box.innerHTML = data.players.length ? '' : '<div class="muted small">Ninguém na lista ainda. Com a whitelist ativada, ninguém entra.</div>';
+  data.players.forEach(p => {
+    const row = document.createElement('div'); row.className = 'inst-row';
+    row.innerHTML = `<div class="inst-meta"><div class="inst-title">${esc(p.name)}</div><div class="muted small"><code>${esc(p.uuid || 'sem uuid')}</code></div></div><div class="inst-actions"><button class="danger sm">Remover</button></div>`;
+    row.querySelector('button').onclick = async () => {
+      if (!await confirmDialog(`Tirar "${p.name}" da whitelist?`, { okText: 'Remover', danger: true })) return;
+      const r = await api('/api/whitelist/remove', { method: 'POST', body: JSON.stringify({ name: p.name }) });
+      toast(r.ok ? 'Removido.' : (r.data.error || 'erro'), r.ok ? undefined : 'err'); loadWhitelist();
+    };
+    box.append(row);
+  });
+}
+async function wlAdd() {
+  if (wlBusy) return;
+  const inp = $('#wlName'), name = inp.value.trim(); if (!name) return;
+  wlBusy = true; $('#wlAdd').disabled = true;
+  const r = await api('/api/whitelist/add', { method: 'POST', body: JSON.stringify({ name }) });
+  wlBusy = false; $('#wlAdd').disabled = false;
+  if (r.ok) { inp.value = ''; toast(`${name} adicionado.`); } else toast(r.data.error || 'erro', 'err');
+  loadWhitelist();
+}
+$('#wlAdd').addEventListener('click', wlAdd);
+$('#wlName').addEventListener('keydown', (e) => { if (e.key === 'Enter') wlAdd(); });
+$('#wlToggle').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  const r = await api('/api/whitelist/toggle', { method: 'POST', body: JSON.stringify({ enabled: on }) });
+  if (!r.ok) { e.target.checked = !on; return toast(r.data.error || 'erro', 'err'); }
+  $('#wlMsg').textContent = `✓ whitelist ${on ? 'ATIVADA' : 'desativada'}.`; setTimeout(() => $('#wlMsg').textContent = '', 5000);
+});
 $('#offlineToggle').addEventListener('change', async (e) => {
   const { ok, data } = await api('/api/compat/offline', { method: 'POST', body: JSON.stringify({ enabled: e.target.checked }) });
   $('#offlineMsg').textContent = ok ? `✓ modo offline ${e.target.checked ? 'ATIVADO' : 'desativado'} — reinicie o servidor.` : (data.error || 'erro');
   setTimeout(() => $('#offlineMsg').textContent = '', 5000);
+  loadWhitelist();
 });
 $('#bedrockBtn').addEventListener('click', async () => {
   const btn = $('#bedrockBtn'), msg = $('#bedrockMsg');
@@ -1200,7 +1271,7 @@ function renderIntegrations(d) {
     const note = document.createElement('div');
     note.className = 'muted small';
     note.style.cssText = 'margin:.2rem 0 .6rem';
-    note.textContent = `Túneis configurados para o servidor ${srv.name || srv.id}${srv.port ? ' (porta ' + srv.port + ')' : ''}. Ao trocar de servidor, o status e o endereço abaixo passam a ser do servidor selecionado.`;
+    note.textContent = `Os túneis (playit e Cloudflare) são únicos: o mesmo endereço serve qualquer servidor, já que só um roda por vez. O túnel aponta pra uma porta local fixa (configurada no painel do serviço), então os servidores que usarem o túnel devem ficar na mesma porta${srv.port ? ` — o selecionado (${srv.name || srv.id}) usa a ${srv.port}` : ''}.`;
     box.append(note);
   }
 
@@ -1210,7 +1281,7 @@ function renderIntegrations(d) {
     let body = '';
     if (!p.installed) body = `<button class="ok sm act" data-a="install">Instalar</button>`;
     else if (!p.hasSecret) {
-      body = `<div class="intg-note">Crie um agente em <a href="https://playit.gg" target="_blank" rel="noopener">playit.gg</a> (Account → Agents → <b>self-managed</b>), copie o <b>secret key</b> e cole aqui (fica salvo só pra este servidor):</div>
+      body = `<div class="intg-note">Crie um agente em <a href="https://playit.gg" target="_blank" rel="noopener">playit.gg</a> (Account → Agents → <b>self-managed</b>), copie o <b>secret key</b> e cole aqui (vale pra todos os servidores — um túnel só):</div>
         <div class="row" style="margin-top:.5rem"><input type="password" class="pl-secret" placeholder="secret key do playit.gg" style="flex:1"><button class="ghost sm act" data-a="secret">Salvar</button></div>`;
     } else if (!p.running) body = `<button class="ok sm act" data-a="start">Ligar túnel</button>`;
     else {
@@ -1219,7 +1290,7 @@ function renderIntegrations(d) {
       body += `<div class="row" style="margin-top:.6rem"><button class="danger sm act" data-a="stop">Desligar</button></div>`;
     }
     body += `<label class="muted small" style="display:block;margin-top:.6rem"><input type="checkbox" class="pl-onstart"${p.onStart ? ' checked' : ''}> iniciar o túnel junto quando eu ligar este servidor</label>`;
-    el.innerHTML = `<div class="intg-head"><div class="intg-ic"><img src="/logos/playit.svg" alt=""></div><div class="intg-meta"><div class="intg-title">playit.gg</div><div class="muted small">Servidor público sem abrir porta no roteador (túnel TCP). Ideal pra Minecraft. Este túnel é <b>deste servidor</b>.</div></div>${intgPill(p.running)}</div><div class="intg-body">${body}</div>`;
+    el.innerHTML = `<div class="intg-head"><div class="intg-ic"><img src="/logos/playit.svg" alt=""></div><div class="intg-meta"><div class="intg-title">playit.gg</div><div class="muted small">Servidor público sem abrir porta no roteador (túnel TCP). Ideal pra Minecraft. Túnel único pra todos os servidores.</div></div>${intgPill(p.running)}</div><div class="intg-body">${body}</div>`;
     const os = el.querySelector('.pl-onstart');
     if (os) os.onchange = async (e) => { const r = await api('/api/integrations/playit-conf', { method: 'POST', body: JSON.stringify({ onStart: e.currentTarget.checked }) }); toast(r.ok ? (e.currentTarget.checked ? 'Túnel ligará junto com o servidor.' : 'Túnel não ligará mais junto.') : (r.data.error || 'erro')); if (!r.ok) { e.currentTarget.checked = !e.currentTarget.checked; } };
     el.querySelectorAll('.act').forEach(b => b.onclick = async (ev) => {

@@ -31,6 +31,7 @@ mod routes;
 mod runner;
 mod servers;
 mod stats;
+mod whitelist;
 mod zipw;
 
 use json::{Map, Value};

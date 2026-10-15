@@ -367,3 +367,9 @@ button.sm{padding:.4rem .7rem;font-size:.82rem;border-radius:8px}
 label.btn-like{display:inline-flex;align-items:center;gap:.35rem;cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:.5rem .9rem;font-weight:600;font-size:.9rem;user-select:none}
 label.btn-like:hover{border-color:var(--accent)}
 .drop-target.dragging{outline:2px dashed var(--accent);outline-offset:6px;border-radius:10px;min-height:4rem}
+
+/* cards de servidor: título quebra em vez de cortar, botões sempre na base */
+#serversGrid .store-top{align-items:flex-start}
+#serversGrid .store-title{white-space:normal;flex:1;min-width:0;overflow-wrap:anywhere}
+#serversGrid .status-pill{flex:none}
+#serversGrid .store-foot{margin-top:auto}

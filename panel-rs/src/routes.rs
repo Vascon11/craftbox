@@ -211,7 +211,7 @@ const STALL_SECS: f64 = 15.0 * 60.0;
 /// RCON sobe. Então `active` só vale com o RCON respondendo; antes disso é
 /// `activating`, e se passar de STALL_SECS vira `stalled` (travado, em geral
 /// swap). Sem RCON habilitado, cai no "Done (" do logs/latest.log.
-fn live_state(exec: bool, cfg: &Map, s: &Srv) -> (String, Value, Option<f64>) {
+pub(crate) fn live_state(exec: bool, cfg: &Map, s: &Srv) -> (String, Value, Option<f64>) {
     let active = runner::svc_active_of(exec, cfg, &s.service);
     let uptime = runner::svc_uptime(exec, cfg, &s.service);
     if active != "active" {
@@ -640,6 +640,28 @@ fn route(st: &State, cfg: &Map, req: &Request, rc: &ReqCtx, cookie: &str) -> Res
     }
 
     // ================= compatibilidade =================
+    // ================= whitelist =================
+    if p == "/api/whitelist" && m == "GET" {
+        return Ok(json(200, &crate::whitelist::status(s)));
+    }
+    if p.starts_with("/api/whitelist/") && m == "POST" {
+        let b = read_body(req);
+        let nick = jsutil::to_string_or_empty(destr(&b, "name")?);
+        let (r, act) = match &p[15..] {
+            "add" => (crate::whitelist::add(exec, cfg, s, &nick), "whitelist-add"),
+            "remove" => (crate::whitelist::remove(exec, cfg, s, &nick), "whitelist-remove"),
+            "fix" => (crate::whitelist::fix_uuids(exec, cfg, s), "whitelist-fix"),
+            "toggle" => (crate::whitelist::set_enabled(exec, cfg, s, truthy(destr(&b, "enabled")?)), "whitelist-toggle"),
+            _ => return Ok(err(404, "rota inexistente")),
+        };
+        return Ok(match r {
+            Ok(v) => {
+                audit::audit(cfg, &who, act, &format!("{} → {}", nick, s.name_str()));
+                json(200, &v)
+            }
+            Err(e) => err(400, &e),
+        });
+    }
     if p == "/api/compat/offline" && m == "POST" {
         let b = read_body(req);
         let enabled = truthy(destr(&b, "enabled")?);
